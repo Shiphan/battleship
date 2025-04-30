@@ -1,52 +1,137 @@
-#include <stddef.h>
-#include <string.h>
-#include <stdlib.h>
-#include <stdbool.h>
-#include <stdio.h>
-#include <assert.h>
-#include <stdint.h>
-#include <sys/ioctl.h>
-#include <unistd.h>
-#include <signal.h>
-#include <termios.h>
-#include <poll.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
 #include <arpa/inet.h>
+#include <assert.h>
 #include <errno.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <signal.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <termios.h>
+#include <unistd.h>
 
 #define COLUMN 10
 #define ROW 8
 
+struct termios old_terminal_attr;
+int socket_fd = -1;
+
 const char* cells[][3] = {
-	{
+	{ // empty
 		"       ",
 		"       ",
 		"       ",
 	},
-	{
-		"/ ... \\",
-		" .   . ",
-		"\\ ... /",
+	{ // unknown
+		"       ",
+		"       ",
+		"       ",
 	},
-	{
+	{ // hit
 		"\\ =#= /",
 		" >#@#< ",
 		"/ =#= \\",
 	},
-	{
-		"=======",
-		"xxxxxxx",
-		"=======",
+	{ // miss
+		"/ ... \\",
+		" .   . ",
+		"\\ ... /",
+	},
+	{ // ship top
+		"  ---  ",
+		" /   \\ ",
+		"|     |",
+	},
+	{ // ship bottom
+		"|     |",
+		" \\   / ",
+		"  ---  ",
+	},
+	{ // ship left
+		" /-----",
+		"|      ",
+		" \\-----",
+	},
+	{ // ship right
+		"-----\\ ",
+		"      |",
+		"-----/ ",
+	},
+	{ // ship h
+		"-------",
+		"       ",
+		"-------",
+	},
+	{ // ship v
+		"|     |",
+		"|     |",
+		"|     |",
+	},
+	{ // ship top destroyed
+		"  -x-  ",
+		" /x#x\\ ",
+		"|  x  |",
+	},
+	{ // ship bottom destroyed
+		"|  x  |",
+		" \\x#x/ ",
+		"  -x-  ",
+	},
+	{ // ship left destroyed
+		" /-x---",
+		"| x#x  ",
+		" \\-x---",
+	},
+	{ // ship right destroyed
+		"---x-\\ ",
+		"  x#x |",
+		"---x-/ ",
+	},
+	{ // ship h destroyed
+		"---x---",
+		"  x#x  ",
+		"---x---",
+	},
+	{ // ship v destroyed
+		"|  x  |",
+		"| x#x |",
+		"|  x  |",
 	},
 };
 
-struct termios old_terminal_attr;
+typedef enum CellState {
+	CellEmpty = 0,
+	CellUnknown,
+	CellHit,
+	CellMiss,
+	CellShipTop,
+	CellShipBottom,
+	CellShipLeft,
+	CellShipRight,
+	CellShipHorizontal,
+	CellShipVertical,
+	CellShipTopDestroyed,
+	CellShipBottomDestroyed,
+	CellShipLeftDestroyed,
+	CellShipRightDestroyed,
+	CellShipHorizontalDestroyed,
+	CellShipVerticalDestroyed,
+} CellState;
 
 typedef struct Size {
 	uint16_t x;
 	uint16_t y;
 } Size;
+
+typedef struct Vec2 {
+	int x;
+	int y;
+} Vec2;
 
 typedef struct Buffer {
 	char** ptr;
@@ -84,17 +169,24 @@ typedef enum JoinSelection {
 	JoinExit,
 } JoinSelection;
 
-typedef struct DynamicString {
-	char* ptr;
-	size_t len;
-	size_t cap;
-} DynamicString;
+typedef struct GameStatus {
+	CellState self_status[ROW][COLUMN];
+	CellState enemy_status[ROW][COLUMN];
+	Vec2 cursor;
+	bool self_preparing;
+	bool enemy_preparing;
+	bool my_turn;
+	int self_hp;
+	int enemy_hp;
+	int self_max_hp;
+	int enemy_max_hp;
+} GameStatus;
 
 typedef struct Status {
 	bool running;
 	Page page;
 	int sock_fd;
-	int map[ROW][COLUMN];
+	GameStatus game;
 	struct {
 		GreetingSelection selection;
 	} greeting;
@@ -118,25 +210,7 @@ void free_buffer(Buffer* buf) {
 	buf->ptr = NULL;
 }
 
-DynamicString dynamic_string_new() {
-	return (DynamicString){
-		.ptr = malloc(256 * sizeof(char)),
-		.len = 0,
-		.cap = 256,
-	};
-}
-
-void dynamic_string_push(DynamicString* str, char ch) {
-	str->len += 1;
-	if (str->cap < str->len + 1) {
-		str->cap *= 2;
-		str->ptr = realloc(str->ptr, str->cap);
-	}
-	str->ptr[str->len - 1] = ch;
-	str->ptr[str->len] = '\0';
-}
-
-Buffer main_ui(int status[ROW][COLUMN]) {
+Buffer grid(CellState status[ROW][COLUMN], Vec2 cursor) {
 	int width = 7;
 	int height = 3;
 	int full_width = width + 3;
@@ -147,28 +221,98 @@ Buffer main_ui(int status[ROW][COLUMN]) {
 
 	char** arr = malloc(y * sizeof(char*));
 	for (int i = 0; i < y; i++) {
-		arr[i] = malloc((x + 1) * sizeof(char));
 		if (i % full_height == 0) {
+			arr[i] = malloc((x + 1) * sizeof(char));
 			memset(arr[i], '-', x);
 			for (int j = 0; j < x / full_width + 1; j++) {
 				arr[i][j * full_width] = '+';
 			}
+			arr[i][x] = '\0';
 		} else {
-			memset(arr[i], ' ', x);
-			for (int j = 0; j < x / full_width + 1; j++) {
-				arr[i][j * full_width] = '|';
-				assert(j * full_width < x);
-			}
-			// content of a cell
+			arr[i] = strdup("");
 			for (int j = 0; j < x / full_width; j++) {
-				// TODO: content
-				int type = status[i / full_height][j];
+				char* new;
+				char* color_start = "";
+				char* color_end = "";
+				if (cursor.x == j && cursor.y == i / full_height) {
+					color_start = "\e[7m";
+					color_end = "\e[0m";
+				}
+				int x_index = j;
+				int type = status[i / full_height][x_index];
 				const char* content = cells[type][i % full_height - 1];
-				memcpy(&arr[i][j * full_width + 2], content, width);
+				asprintf(&new, "%s| %s%s%s ", arr[i], color_start, content, color_end);
+				free(arr[i]);
+				arr[i] = new;
 			}
+			size_t len = strlen(arr[i]);
+			arr[i] = realloc(arr[i], len + 2);
+			arr[i][len] = '|';
+			arr[i][len + 1] = '\0';
 		}
-		arr[i][x] = '\0';
 	}
+
+	return (Buffer){
+		.ptr = arr,
+		.size = { .x = x, .y = y, },
+	};
+}
+
+Buffer game_ui(GameStatus* status) {
+	Vec2 left_cursor = { .x = -1, .y = -1, };
+	Vec2 right_cursor = { .x = -1, .y = -1, };
+	if (status->self_preparing) {
+		right_cursor = status->cursor;
+	} else {
+		left_cursor = status->cursor;
+	}
+	Buffer left = grid(status->enemy_status, left_cursor);
+	Buffer right = grid(status->self_status, right_cursor);
+	assert(left.size.y == right.size.y);
+
+	uint16_t top_bar_y = 3;
+
+	uint16_t y = left.size.y + top_bar_y;
+
+	char* gap = "  ~~  ";
+	char** arr = malloc(y * sizeof(char*));
+
+	for (int i = 0; i < left.size.y; i++) {
+		asprintf(&arr[i + top_bar_y], "%s%s%s", left.ptr[i], gap, right.ptr[i]);
+	}
+	free_buffer(&left);
+	free_buffer(&right);
+
+	uint16_t x = left.size.x + strlen(gap) + right.size.x;
+
+	asprintf(&arr[0], "%*s", x, "");
+	asprintf(&arr[2], "%*s", x, "");
+
+	assert(x % 2 == 0);
+	int bar_len = x / 2 - 3 - 7;
+	char* left_hp_bar = malloc(bar_len + 1);
+	memset(left_hp_bar, '\\', bar_len);
+	memset(left_hp_bar, '.', bar_len - (int)(bar_len * ((double)status->enemy_hp / status->enemy_max_hp)));
+	// memset(left_hp_bar, '.', bar_len / 2);
+	left_hp_bar[bar_len] = '\0';
+
+	char* right_hp_bar = malloc(bar_len + 1);
+	memset(right_hp_bar, '.', bar_len);
+	memset(right_hp_bar, '/', (int)(bar_len * ((double)status->self_hp / status->self_max_hp)));
+	// memset(right_hp_bar, '/', bar_len / 2);
+	right_hp_bar[bar_len] = '\0';
+
+	char* turn;
+	if (status->my_turn) {
+		turn = "      <> >>>  ";
+	} else {
+		turn = "  <<< <>      ";
+	}
+
+	asprintf(&arr[1], "%-3d%s%s%s%3d", status->enemy_hp, left_hp_bar, turn, right_hp_bar, status->self_hp); 
+
+	free(left_hp_bar);
+	free(right_hp_bar);
 
 	return (Buffer){
 		.ptr = arr,
@@ -238,9 +382,8 @@ Buffer creating_options(int32_t port, CreatingSelection selection) {
 		"- Create",
 		"- Cancel",
 	};
-	char* padding = malloc((x - strlen(options[0])) / 2 + 1);
-	memset(padding, ' ', (x - strlen(options[0])) / 2);
-	padding[(x - strlen(options[0])) / 2] = '\0';
+	char* padding;
+	asprintf(&padding, "%*s", (int)(x - strlen(options[0])) / 2, "");
 	char* right = "";
 	if ((x - strlen(options[0])) % 2 != 0) {
 		right = " ";
@@ -254,6 +397,7 @@ Buffer creating_options(int32_t port, CreatingSelection selection) {
 		}
 		asprintf(&arr[i + 1], "%s%s%s%s%s%s", color_start, padding, options[i], padding, right, color_end);
 	}
+	free(padding);
 
 	return (Buffer){
 		.ptr = arr,
@@ -287,12 +431,11 @@ Buffer join_options(char* addr, JoinSelection selection) {
 	free(buf);
 
 	char* options[2] = {
-		"- Create",
+		"- Join  ",
 		"- Cancel",
 	};
-	char* padding = malloc((x - strlen(options[0])) / 2 + 1);
-	memset(padding, ' ', (x - strlen(options[0])) / 2);
-	padding[(x - strlen(options[0])) / 2] = '\0';
+	char* padding;
+	asprintf(&padding, "%*s", (int)(x - strlen(options[0])) / 2, "");
 	char* right = "";
 	if ((x - strlen(options[0])) % 2 != 0) {
 		right = " ";
@@ -306,6 +449,7 @@ Buffer join_options(char* addr, JoinSelection selection) {
 		}
 		asprintf(&arr[i + 1], "%s%s%s%s%s%s", color_start, padding, options[i], padding, right, color_end);
 	}
+	free(padding);
 
 	return (Buffer){
 		.ptr = arr,
@@ -323,15 +467,15 @@ Buffer waiting_client(uint16_t port) {
 	char* old;
 	asprintf(&old, "port %d", port); 
 
-	char padding[64];
-	memset(padding, ' ', (strlen(arr[0]) - strlen(old)) / 2);
-	padding[(strlen(arr[0]) - strlen(old)) / 2] = '\0';
+	char* padding;
+	asprintf(&padding, "%*s", (int)(strlen(arr[0]) - strlen(old)) / 2, "");
 	char* right = "";
 	if ((strlen(arr[0]) - strlen(old)) % 2 != 0) {
 		right = " ";
 	}
 	asprintf(&arr[1], "%s%s%s%s", padding, old, padding, right); 
 	free(old);
+	free(padding);
 
 	uint16_t x = strlen(arr[0]);
 
@@ -351,15 +495,15 @@ Buffer waiting_server(char* addr) {
 	char* old;
 	asprintf(&old, "Address %s", addr); 
 
-	char padding[64];
-	memset(padding, ' ', (strlen(arr[0]) - strlen(old)) / 2);
-	padding[(strlen(arr[0]) - strlen(old)) / 2] = '\0';
+	char* padding;
+	asprintf(&padding, "%*s", (int)(strlen(arr[0]) - strlen(old)) / 2, "");
 	char* right = "";
 	if ((strlen(arr[0]) - strlen(old)) % 2 != 0) {
 		right = " ";
 	}
 	asprintf(&arr[1], "%s%s%s%s", padding, old, padding, right); 
 	free(old);
+	free(padding);
 
 	uint16_t x = strlen(arr[0]);
 
@@ -402,20 +546,22 @@ Buffer greeting_screen(Buffer options) {
 	for (int i = 0; i < sizeof(top_part) / sizeof(top_part[0]); i++) {
 		arr[i] = strdup(top_part[i]);
 	}
+
+	char* other = "|         |         |";
+	char* padding;
+	asprintf(&padding, "%*s", (39 - options.size.x) / 2, "");
+	char* right = "";
+	if ((39 - options.size.x) % 2 != 0) {
+		right = " ";
+	}
 	for (int i = 0; i < 3; i++) {
 		char* buffer;
-		char* other = "|         |         |";
-		char padding[64];
-		memset(padding, ' ', (39 - options.size.x) / 2);
-		padding[(39 - options.size.x) / 2] = '\0';
-		char* right = "";
-		if ((39 - options.size.x) % 2 != 0) {
-			right = " ";
-		}
-		asprintf(&buffer, "%s%s%s%s%s%s", other, padding, options.ptr[i], padding, right, other);
-		
+	asprintf(&buffer, "%s%s%s%s%s%s", other, padding, options.ptr[i], padding, right, other);
+
 		arr[sizeof(top_part) / sizeof(top_part[0]) + i] = buffer;
 	}
+	free(padding);
+
 	arr[y - 1] = strdup("+---------+---------+---------+---------+---------+---------+---------+---------+");
 	
 	free_buffer(&options);
@@ -493,6 +639,7 @@ char* ui_wrapper(Buffer buf, Size size) {
 		}
 		free(old_result);
 	}
+	free(x_padding);
 	free(y_padding);
 
 	free_buffer(&buf);
@@ -712,6 +859,41 @@ void handle_join_key_event(Status* status, int key) {
 	}
 }
 
+void handle_game_key_event(Status* status, int key) {
+	switch (key) {
+		case 'j': case 's':
+			if (status->game.cursor.y < ROW - 1) {
+				status->game.cursor.y += 1;
+			}
+			break;
+		case 'k': case 'w':
+			if (status->game.cursor.y > 0) {
+				status->game.cursor.y -= 1;
+			}
+			break;
+		case 'h': case 'a':
+			if (status->game.cursor.x > 0) {
+				status->game.cursor.x -= 1;
+			}
+			break;
+		case 'l': case 'd':
+			if (status->game.cursor.x < COLUMN - 1) {
+				status->game.cursor.x += 1;
+			}
+			break;
+		case '\n': {
+			if (status->game.my_turn) {
+				status->game.my_turn = false;
+				char* buf;
+				asprintf(&buf, "FIRE %d,%d\n", status->game.cursor.x, status->game.cursor.y);
+				write(status->sock_fd, buf, strlen(buf));
+				free(buf);
+			}
+			break;
+		}
+	}
+}
+
 void handle_key_event(Status* status) {
 	struct pollfd fds = { .fd = STDIN_FILENO, .events = POLLIN };
 	while (poll(&fds, 1, 0) > 0) {
@@ -731,11 +913,201 @@ void handle_key_event(Status* status) {
 			case WaitingServer:
 				break;
 			case Game:
+				handle_game_key_event(status, key);
 				break;
 			case Error:
 				break;
 		}
 	}
+}
+
+bool streq(const char* a, const char* b) {
+	return strcmp(a, b) == 0;
+}
+
+bool string_has_prefix(const char* str, const char* prefix) {
+	return strncmp(str, prefix, strlen(prefix)) == 0;
+}
+
+bool cell_is_ship_not_destroyed(CellState target) {
+	return target >= CellShipTop && target <= CellShipVertical;
+}
+
+bool cell_is_ship_destroyed(CellState target) {
+	return target >= CellShipTopDestroyed && target <= CellShipVerticalDestroyed;
+}
+
+char* handle_fire(CellState self_cells[ROW][COLUMN], Vec2 position, int* self_hp) {
+	CellState target = self_cells[position.y][position.x];
+	if (cell_is_ship_not_destroyed(target)) {
+		*self_hp -= 1;
+		self_cells[position.y][position.x] = target + (CellShipTopDestroyed - CellShipTop);
+	} else if (target == CellEmpty) {
+		self_cells[position.y][position.x] = CellMiss;
+		char* message;
+		asprintf(&message, "MISS %d,%d\n", position.x, position.y);
+		return message;
+	} else {
+		return strdup("IGNORE");
+	}
+
+	Vec2 start_position = position;
+	char* message;
+	bool destroyed = false;
+	switch (self_cells[position.y][position.x]) {
+		case CellShipTopDestroyed:
+			while (true) {
+				if (self_cells[position.y][position.x] == CellShipBottomDestroyed) {
+					destroyed = true;
+					break;
+				} else if (cell_is_ship_not_destroyed(self_cells[position.y][position.x])) {
+					destroyed = false;
+					break;
+				} else if (cell_is_ship_destroyed(self_cells[position.y][position.x])) {
+					position.y++;
+				} else {
+					abort();
+				}
+			}
+			if (destroyed) {
+				asprintf(&message, "DESTROYED v,%d,%d,%d", start_position.x, start_position.y, position.y);
+			}
+			break;
+		case CellShipBottomDestroyed:
+			while (true) {
+				if (self_cells[position.y][position.x] == CellShipTopDestroyed) {
+					destroyed = true;
+					break;
+				} else if (cell_is_ship_not_destroyed(self_cells[position.y][position.x])) {
+					destroyed = false;
+					break;
+				} else if (cell_is_ship_destroyed(self_cells[position.y][position.x])) {
+					position.y--;
+				} else {
+					abort();
+				}
+			}
+			if (destroyed) {
+				asprintf(&message, "DESTROYED v,%d,%d,%d", start_position.x, position.y, start_position.y);
+			}
+			break;
+		case CellShipLeftDestroyed:
+			while (true) {
+				if (self_cells[position.y][position.x] == CellShipRightDestroyed) {
+					destroyed = true;
+					break;
+				} else if (cell_is_ship_not_destroyed(self_cells[position.y][position.x])) {
+					destroyed = false;
+					break;
+				} else if (cell_is_ship_destroyed(self_cells[position.y][position.x])) {
+					position.x++;
+				} else {
+					abort();
+				}
+			}
+			if (destroyed) {
+				asprintf(&message, "DESTROYED h,%d,%d,%d", start_position.x, position.x, start_position.y);
+			}
+			break;
+		case CellShipRightDestroyed:
+			while (true) {
+				if (self_cells[position.y][position.x] == CellShipLeftDestroyed) {
+					destroyed = true;
+					break;
+				} else if (cell_is_ship_not_destroyed(self_cells[position.y][position.x])) {
+					destroyed = false;
+					break;
+				} else if (cell_is_ship_destroyed(self_cells[position.y][position.x])) {
+					position.x--;
+				} else {
+					abort();
+				}
+			}
+			if (destroyed) {
+				asprintf(&message, "DESTROYED h,%d,%d,%d", position.x, start_position.x, start_position.y);
+			}
+			break;
+		case CellShipHorizontalDestroyed: {
+			int left = start_position.x;
+			int right = start_position.x;
+			while (true) {
+				if (self_cells[position.y][left] == CellShipLeftDestroyed) {
+					destroyed = true;
+					break;
+				} else if (cell_is_ship_not_destroyed(self_cells[position.y][left])) {
+					destroyed = false;
+					break;
+				} else if (cell_is_ship_destroyed(self_cells[position.y][left])) {
+					left--;
+				} else {
+					abort();
+				}
+			}
+			if (!destroyed) {
+				break;
+			}
+			while (true) {
+				if (self_cells[position.y][right] == CellShipRightDestroyed) {
+					destroyed = true;
+					break;
+				} else if (cell_is_ship_not_destroyed(self_cells[position.y][right])) {
+					destroyed = false;
+					break;
+				} else if (cell_is_ship_destroyed(self_cells[position.y][right])) {
+					right++;
+				} else {
+					abort();
+				}
+			}
+			if (destroyed) {
+				asprintf(&message, "DESTROYED h,%d,%d,%d", left, right, start_position.y);
+			}
+			break;
+		}
+		case CellShipVerticalDestroyed: {
+			int top = start_position.y;
+			int bottom = start_position.y;
+			while (true) {
+				if (self_cells[top][position.x] == CellShipTopDestroyed) {
+					destroyed = true;
+					break;
+				} else if (cell_is_ship_not_destroyed(self_cells[top][position.x])) {
+					destroyed = false;
+					break;
+				} else if (cell_is_ship_destroyed(self_cells[top][position.x])) {
+					top--;
+				} else {
+					abort();
+				}
+			}
+			if (!destroyed) {
+				break;
+			}
+			while (true) {
+				if (self_cells[bottom][position.x] == CellShipBottomDestroyed) {
+					destroyed = true;
+					break;
+				} else if (cell_is_ship_not_destroyed(self_cells[bottom][position.x])) {
+					destroyed = false;
+					break;
+				} else if (cell_is_ship_destroyed(self_cells[bottom][position.x])) {
+					bottom++;
+				} else {
+					abort();
+				}
+			}
+			if (destroyed) {
+				asprintf(&message, "DESTROYED v,%d,%d,%d", start_position.x, top, bottom);
+			}
+			break;
+		}
+		default:
+			abort();
+	}
+	if (!destroyed) {
+		asprintf(&message, "HIT %d,%d\n", start_position.x, start_position.y);
+	}
+	return message;
 }
 
 void handle_actions(Status* status) {
@@ -751,15 +1123,23 @@ void handle_actions(Status* status) {
 			int accepted_fd = accept(status->sock_fd, (struct sockaddr*)&addr, &addr_len);
 			if (accepted_fd != -1) {
 				status->page = Game;
-				char* buf = "hi from server\n";
-				write(accepted_fd, buf, strlen(buf));
+				close(status->sock_fd);
+				status->sock_fd = accepted_fd;
+				socket_fd = accepted_fd;
+				status->game.my_turn = true;
+
+				// FIXME: remove
+				status->game.self_status[3][3] = CellShipTop;
+				status->game.self_status[4][3] = CellShipBottom;
+				// char* buf = "hi from server\n";
+				// write(accepted_fd, buf, strlen(buf));
 			} else if (errno != EAGAIN && errno != EWOULDBLOCK) {
 				status->page = Error;
 			}
 			break;
 		}
 		case WaitingServer: {
-			char buf[32];
+			char buf[32] = {0};
 			strcpy(buf, status->join.connect_addr);
 			char* addr_ip;
 			char* addr_port;
@@ -774,7 +1154,7 @@ void handle_actions(Status* status) {
 			uint16_t port;
 			{
 				char* end;
-				ulong tmp_port = strtoul(addr_port, &end, 10);
+				uint64_t tmp_port = strtoul(addr_port, &end, 10);
 				assert(end != addr_port);
 				assert(tmp_port <= UINT16_MAX);
 				port = tmp_port;
@@ -783,7 +1163,7 @@ void handle_actions(Status* status) {
 			struct sockaddr_in addr;
 			addr.sin_family = AF_INET;
 			addr.sin_port = htons(port);
-			if (strcmp(addr_ip, "localhost") == 0) {
+			if (streq(addr_ip, "localhost")) {
 				addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 			} else {
 				in_addr_t tmp_addr = inet_addr(addr_ip);
@@ -797,22 +1177,160 @@ void handle_actions(Status* status) {
 			int err = connect(status->sock_fd, (struct sockaddr*)&addr, sizeof(addr));
 			if (err == 0) {
 				status->page = Game;
-				char* buf = "hi from client\n";
-				write(status->sock_fd, buf, strlen(buf));
+				status->game.my_turn = false;
+				// FIXME: remove
+				status->game.self_status[1][2] = CellShipTop;
+				status->game.self_status[2][2] = CellShipVertical;
+				status->game.self_status[3][2] = CellShipBottom;
+				status->game.self_status[2][4] = CellShipLeft;
+				status->game.self_status[2][5] = CellShipHorizontal;
+				status->game.self_status[2][6] = CellShipRight;
+				status->game.self_status[4][1] = CellShipLeft;
+				status->game.self_status[4][2] = CellShipHorizontal;
+				status->game.self_status[4][3] = CellShipRight;
+				// char* buf = "hi from client\n";
+				// write(status->sock_fd, buf, strlen(buf));
 			} else if (errno != EAGAIN && errno != EALREADY && errno != EINPROGRESS) {
 				status->page = Error;
 			}
 			break;
 		}
-		case Game:
-			// TODO: handle
+		case Game: {
+			struct pollfd fds = { .fd = status->sock_fd, .events = POLLIN, };
+			while (poll(&fds, 1, 0) > 0) {
+				char buf[256] = {0};
+				int readed = read(status->sock_fd, buf, sizeof(buf) - 1);
+				if (readed == -1) {
+					status->page = Error;
+					break;
+				} else if (readed == 0) {
+					status->running = false;
+					break;
+				}
+
+				char* save;
+				char* method = strtok_r(buf, " ", &save);
+				char* parms = strtok_r(NULL, "\n", &save);
+				assert(method != NULL);
+				if (string_has_prefix(buf, "FIRE")) {
+					assert(parms != NULL);
+					char* save;
+					char* x_str = strtok_r(parms, ",", &save);
+					char* y_str = strtok_r(NULL, "", &save);
+
+					Vec2 position;
+					char* end;
+					position.x = COLUMN - strtoul(x_str, &end, 10) - 1;
+					assert(end != x_str);
+					position.y = strtoul(y_str, &end, 10);
+					assert(end != y_str);
+
+					if (!status->game.my_turn) {
+						status->game.my_turn = true;
+						char* message = handle_fire(status->game.self_status, position, &status->game.self_hp);
+						write(status->sock_fd, message, strlen(message));
+						free(message);
+					}
+				} else if (string_has_prefix(buf, "HIT")) {
+					assert(parms != NULL);
+					char* save;
+					char* x_str = strtok_r(parms, ",", &save);
+					char* y_str = strtok_r(NULL, "", &save);
+
+					Vec2 position;
+					char* end;
+					position.x = COLUMN - strtoul(x_str, &end, 10) - 1;
+					assert(end != x_str);
+					position.y = strtoul(y_str, &end, 10);
+					assert(end != y_str);
+
+					status->game.enemy_hp -= 1;
+					status->game.enemy_status[position.y][position.x] = CellHit;
+				} else if (string_has_prefix(buf, "MISS")) {
+					assert(parms != NULL);
+					char* save;
+					char* x_str = strtok_r(parms, ",", &save);
+					char* y_str = strtok_r(NULL, "", &save);
+
+					Vec2 position;
+					char* end;
+					position.x = COLUMN - strtoul(x_str, &end, 10) - 1;
+					assert(end != x_str);
+					position.y = strtoul(y_str, &end, 10);
+					assert(end != y_str);
+
+					status->game.enemy_status[position.y][position.x] = CellMiss;
+				} else if (string_has_prefix(buf, "DESTROYED")) {
+					assert(parms != NULL);
+					char* save;
+					char* direction = strtok_r(parms, ",", &save);
+					char* a_str = strtok_r(NULL, ",", &save);
+					char* b_str = strtok_r(NULL, ",", &save);
+					char* c_str = strtok_r(NULL, "", &save);
+					assert(direction!= NULL);
+					assert(a_str != NULL);
+					assert(b_str != NULL);
+					assert(c_str != NULL);
+					char* end;
+					int a = strtoul(a_str, &end, 10);
+					assert(end != a_str);
+					int b = strtoul(b_str, &end, 10);
+					assert(end != b_str);
+					int c = strtoul(c_str, &end, 10);
+					assert(end != c_str);
+					if (streq(direction, "v")) {
+						int x = COLUMN - a - 1;
+						int y1 = b;
+						int y2 = c;
+						for (int y = y1; y <= y2; y++) {
+							if (y == y1) {
+								status->game.enemy_status[y][x] = CellShipTopDestroyed;
+							} else if (y == y2) {
+								status->game.enemy_status[y][x] = CellShipBottomDestroyed;
+							} else {
+								status->game.enemy_status[y][x] = CellShipVerticalDestroyed;
+							}
+
+						}
+					} else if (streq(direction, "h")){
+						int x1 = COLUMN - a - 1;
+						int x2 = COLUMN - b - 1;
+						int y = c;
+						for (int x = x2; x <= x1; x++) {
+							if (x == x2) {
+								status->game.enemy_status[y][x] = CellShipLeftDestroyed;
+							} else if (x == x1) {
+								status->game.enemy_status[y][x] = CellShipRightDestroyed;
+							} else {
+								status->game.enemy_status[y][x] = CellShipHorizontalDestroyed;
+							}
+						}
+					} else {
+						assert(streq(direction, "v") || streq(direction, "h"));
+					}
+					status->game.enemy_hp -= 1;
+				} else if (string_has_prefix(buf, "READY")) {
+					assert(parms != NULL);
+					char* end;
+					status->game.enemy_max_hp = strtoul(parms, &end, 10);
+					assert(end != parms);
+					status->game.enemy_hp = status->game.enemy_max_hp; 
+					status->game.enemy_preparing = false;
+				} else if (string_has_prefix(buf, "IGNORE")) {
+					assert(parms == NULL);
+				}
+			}
 			break;
+		}
 	}
 }
 
 void ctrl_c_handler(int sig) {
 	assert(sig == SIGINT);
 	leave_alter_screen();
+	if (socket_fd != -1) {
+		close(socket_fd);
+	}
 	exit(0);
 }
 
@@ -831,24 +1349,23 @@ int main(int argc, char** argv) {
 	ctrl_c();
 	enter_alter_screen();
 
-	// bool running;
-	// Page page;
-	// int sock_fd;
-	// int map[ROW][COLUMN];
-	// struct {
-	// 	GreetingSelection selection;
-	// } greeting;
-	// struct {
-	// 	CreatingSelection selection;
-	// 	int32_t creating_port;
-	// 	char* connect_addr; 
-	// } creating;
-	// 111.111.111.111:12345
 	Status status = {
 		.running = true,
 		.page = Greeting,
 		.sock_fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0),
-		.map = {0},
+		.game = {
+			.cursor = { .x = 0, .y = 0, },
+			.self_status = {0},
+			// .self_preparing = true,
+			.self_preparing = false,
+			.self_hp = 20,
+			.self_max_hp = 20,
+			.enemy_status = {0},
+			// .enemy_preparing = true,
+			.enemy_preparing = false,
+			.enemy_hp = 20,
+			.enemy_max_hp = 20,
+		},
 		.greeting = {
 			.selection = GreetingNone,
 		},
@@ -858,13 +1375,11 @@ int main(int argc, char** argv) {
 		},
 		.join = {
 			.selection = JoinTyping,
-			// .connect_addr = 
+			.connect_addr = {0},
 			.cursor = 0,
 		},
 	};
-
-	status.map[1][2] = 2;
-	status.map[0][3] = 1;
+	socket_fd = status.sock_fd;
 
 	while (status.running) {
 		handle_key_event(&status);
@@ -888,7 +1403,7 @@ int main(int argc, char** argv) {
 				print_ui(greeting_screen(waiting_server(status.join.connect_addr)));
 				break;
 			case Game:
-				print_ui(main_ui(status.map));
+				print_ui(game_ui(&status.game));
 				break;
 			case Error:
 				print_ui(error_screen());
