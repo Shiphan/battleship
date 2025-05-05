@@ -145,6 +145,7 @@ typedef enum Page {
 	WaitingClient,
 	WaitingServer,
 	Game,
+	End,
 	Error,
 } Page;
 
@@ -358,6 +359,53 @@ Buffer game_ui(GameStatus* status) {
 		.ptr = arr,
 		.size = { .x = x, .y = y, },
 	};
+}
+
+Buffer end_ui(GameStatus* status) {
+	if (status->self_hp != 0 && status->enemy_hp == 0) {
+		char* output[] = {
+			" _    ___      __                  ",
+			"| |  / (_)____/ /_____  _______  __",
+			"| | / / / ___/ __/ __ \\/ ___/ / / /",
+			"| |/ / / /__/ /_/ /_/ / /  / /_/ / ",
+			"|___/_/\\___/\\__/\\____/_/   \\__, /  ",
+			"                          /____/   ",
+		};
+
+		uint16_t x = strlen(output[0]);
+		uint16_t y = sizeof(output) / sizeof(output[0]);
+
+		char** arr = malloc(y * sizeof(char*));
+		for (int i = 0; i < y; i++) {
+			arr[i] = strdup(output[i]);
+		}
+		return (Buffer){
+			.ptr = arr,
+			.size = { .x = x, .y = y, },
+		};
+	} else if (status->self_hp == 0 && status->enemy_hp != 0) {
+		char* output[] = {
+			"    ____       ____           __ ",
+			"   / __ \\___  / __/__  ____ _/ /_",
+			"  / / / / _ \\/ /_/ _ \\/ __ `/ __/",
+			" / /_/ /  __/ __/  __/ /_/ / /_  ",
+			"/_____/\\___/_/  \\___/\\__,_/\\__/  ",
+		};
+
+		uint16_t x = strlen(output[0]);
+		uint16_t y = sizeof(output) / sizeof(output[0]);
+
+		char** arr = malloc(y * sizeof(char*));
+		for (int i = 0; i < y; i++) {
+			arr[i] = strdup(output[i]);
+		}
+		return (Buffer){
+			.ptr = arr,
+			.size = { .x = x, .y = y, },
+		};
+	} else {
+		abort();
+	}
 }
 
 Buffer greeting_options(GreetingSelection selection) {
@@ -1069,17 +1117,26 @@ void handle_key_event(Status* status) {
 					handle_game_key_event(status, key);
 				}
 				break;
+			case End:
+				if (key == '\n') {
+					status->running = false;
+				}
+				break;
 			case Error:
 				break;
 		}
 	}
 }
 
-char* handle_fire(CellState self_cells[ROW][COLUMN], Vec2 position, int* self_hp) {
+char* handle_fire(Status* status, Vec2 position) {
+	typeof(CellState[COLUMN])* self_cells = &(status->game.self_status[0]);
 	CellState target = self_cells[position.y][position.x];
 	if (cell_is_ship_not_destroyed(target)) {
-		*self_hp -= 1;
+		status->game.self_hp -= 1;
 		self_cells[position.y][position.x] = target + (CellShipTopDestroyed - CellShipTop);
+		if (status->game.self_hp <= 0) {
+			status->page = End;
+		}
 	} else if (target == CellEmpty) {
 		self_cells[position.y][position.x] = CellMiss;
 		char* message;
@@ -1280,7 +1337,7 @@ void handle_game_action(Status* status) {
 
 			if (!status->game.my_turn) {
 				status->game.my_turn = true;
-				char* message = handle_fire(status->game.self_status, position, &status->game.self_hp);
+				char* message = handle_fire(status, position);
 				write(status->sock_fd, message, strlen(message));
 				free(message);
 			}
@@ -1362,6 +1419,9 @@ void handle_game_action(Status* status) {
 				assert(streq(direction, "v") || streq(direction, "h"));
 			}
 			status->game.enemy_hp -= 1;
+			if (status->game.enemy_hp <= 0) {
+				status->page = End;
+			}
 		} else if (string_has_prefix(buf, "READY")) {
 			assert(parms != NULL);
 			char* end;
@@ -1380,6 +1440,7 @@ void handle_actions(Status* status) {
 		case Greeting:
 		case Creating:
 		case Join:
+		case End:
 		case Error:
 			break;
 		case WaitingClient: {
@@ -1526,6 +1587,9 @@ int main(int argc, char** argv) {
 				break;
 			case Game:
 				print_ui(game_ui(&status.game));
+				break;
+			case End:
+				print_ui(end_ui(&status.game));
 				break;
 			case Error:
 				print_ui(error_screen());
