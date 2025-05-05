@@ -986,9 +986,6 @@ void handle_preparing_key_event(Status* status, int key) {
 			status->game.preparing_cursor = (Vec2){ .x = -1, .y = -1, };
 			break;
 		case ' ':
-			status->game.cursor = (Vec2){ .x = COLUMN - 1, .y = 0, };
-			status->game.preparing_cursor = (Vec2){ .x = -1, .y = -1, };
-			status->game.self_preparing = false;
 			status->game.self_max_hp = 0;
 			for (int y = 0; y < ROW; y++) {
 				for (int x = 0; x < COLUMN; x++) {
@@ -997,6 +994,12 @@ void handle_preparing_key_event(Status* status, int key) {
 					}
 				}
 			}
+			if (status->game.self_max_hp == 0) {
+				break;
+			}
+			status->game.cursor = (Vec2){ .x = COLUMN - 1, .y = 0, };
+			status->game.preparing_cursor = (Vec2){ .x = -1, .y = -1, };
+			status->game.self_preparing = false;
 			status->game.self_hp = status->game.self_max_hp;
 			char* buf;
 			asprintf(&buf, "READY %d\n", status->game.self_max_hp);
@@ -1478,14 +1481,12 @@ int main(int argc, char** argv) {
 			.preparing_cursor  = { .x = -1, .y = -1, },
 			.self_status = {0},
 			.self_preparing = true,
-			// .self_preparing = false,
-			.self_hp = 20,
-			.self_max_hp = 20,
+			.self_hp = 0,
+			.self_max_hp = 0,
 			.enemy_status = {0},
 			.enemy_preparing = true,
-			// .enemy_preparing = false,
-			.enemy_hp = 20,
-			.enemy_max_hp = 20,
+			.enemy_hp = 0,
+			.enemy_max_hp = 0,
 		},
 		.greeting = {
 			.selection = GreetingNone,
