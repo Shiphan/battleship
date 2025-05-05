@@ -1389,10 +1389,6 @@ void handle_actions(Status* status) {
 				status->sock_fd = accepted_fd;
 				socket_fd = accepted_fd;
 				status->game.my_turn = true;
-
-				// // FIXME: remove
-				// status->game.self_status[3][3] = CellShipTop;
-				// status->game.self_status[4][3] = CellShipBottom;
 			} else if (errno != EAGAIN && errno != EWOULDBLOCK) {
 				status->page = Error;
 			}
@@ -1438,17 +1434,6 @@ void handle_actions(Status* status) {
 			if (err == 0) {
 				status->page = Game;
 				status->game.my_turn = false;
-
-				// // FIXME: remove
-				// status->game.self_status[1][2] = CellShipTop;
-				// status->game.self_status[2][2] = CellShipVertical;
-				// status->game.self_status[3][2] = CellShipBottom;
-				// status->game.self_status[2][4] = CellShipLeft;
-				// status->game.self_status[2][5] = CellShipHorizontal;
-				// status->game.self_status[2][6] = CellShipRight;
-				// status->game.self_status[4][1] = CellShipLeft;
-				// status->game.self_status[4][2] = CellShipHorizontal;
-				// status->game.self_status[4][3] = CellShipRight;
 			} else if (errno != EAGAIN && errno != EALREADY && errno != EINPROGRESS) {
 				status->page = Error;
 			}
