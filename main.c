@@ -923,7 +923,11 @@ void handle_preparing_key_event(Status* status, int key) {
 			break;
 		case '\n':
 			if (status->game.preparing_cursor.x == -1 && status->game.preparing_cursor.y == -1) {
-				status->game.preparing_cursor = status->game.cursor;
+				if (cell_is_ship_not_destroyed(status->game.self_status[status->game.cursor.y][status->game.cursor.x])) {
+					// TODO: remove this ship
+				} else {
+					status->game.preparing_cursor = status->game.cursor;
+				}
 			} else if (status->game.preparing_cursor.x == status->game.cursor.x && status->game.preparing_cursor.y != status->game.cursor.y) {
 				int x = status->game.cursor.x;
 				int y_min;
