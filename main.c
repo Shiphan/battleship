@@ -1083,7 +1083,7 @@ char* handle_fire(CellState self_cells[ROW][COLUMN], Vec2 position, int* self_hp
 		asprintf(&message, "MISS %d,%d\n", position.x, position.y);
 		return message;
 	} else {
-		return strdup("IGNORE");
+		return strdup("IGNORE\n");
 	}
 
 	Vec2 start_position = position;
@@ -1105,7 +1105,7 @@ char* handle_fire(CellState self_cells[ROW][COLUMN], Vec2 position, int* self_hp
 				}
 			}
 			if (destroyed) {
-				asprintf(&message, "DESTROYED v,%d,%d,%d", start_position.x, start_position.y, position.y);
+				asprintf(&message, "DESTROYED v,%d,%d,%d\n", start_position.x, start_position.y, position.y);
 			}
 			break;
 		case CellShipBottomDestroyed:
@@ -1123,7 +1123,7 @@ char* handle_fire(CellState self_cells[ROW][COLUMN], Vec2 position, int* self_hp
 				}
 			}
 			if (destroyed) {
-				asprintf(&message, "DESTROYED v,%d,%d,%d", start_position.x, position.y, start_position.y);
+				asprintf(&message, "DESTROYED v,%d,%d,%d\n", start_position.x, position.y, start_position.y);
 			}
 			break;
 		case CellShipLeftDestroyed:
@@ -1141,7 +1141,7 @@ char* handle_fire(CellState self_cells[ROW][COLUMN], Vec2 position, int* self_hp
 				}
 			}
 			if (destroyed) {
-				asprintf(&message, "DESTROYED h,%d,%d,%d", start_position.x, position.x, start_position.y);
+				asprintf(&message, "DESTROYED h,%d,%d,%d\n", start_position.x, position.x, start_position.y);
 			}
 			break;
 		case CellShipRightDestroyed:
@@ -1159,7 +1159,7 @@ char* handle_fire(CellState self_cells[ROW][COLUMN], Vec2 position, int* self_hp
 				}
 			}
 			if (destroyed) {
-				asprintf(&message, "DESTROYED h,%d,%d,%d", position.x, start_position.x, start_position.y);
+				asprintf(&message, "DESTROYED h,%d,%d,%d\n", position.x, start_position.x, start_position.y);
 			}
 			break;
 		case CellShipHorizontalDestroyed: {
@@ -1195,7 +1195,7 @@ char* handle_fire(CellState self_cells[ROW][COLUMN], Vec2 position, int* self_hp
 				}
 			}
 			if (destroyed) {
-				asprintf(&message, "DESTROYED h,%d,%d,%d", left, right, start_position.y);
+				asprintf(&message, "DESTROYED h,%d,%d,%d\n", left, right, start_position.y);
 			}
 			break;
 		}
@@ -1232,7 +1232,7 @@ char* handle_fire(CellState self_cells[ROW][COLUMN], Vec2 position, int* self_hp
 				}
 			}
 			if (destroyed) {
-				asprintf(&message, "DESTROYED v,%d,%d,%d", start_position.x, top, bottom);
+				asprintf(&message, "DESTROYED v,%d,%d,%d\n", start_position.x, top, bottom);
 			}
 			break;
 		}
