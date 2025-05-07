@@ -228,7 +228,7 @@ bool cell_is_ship_destroyed(CellState target) {
 	return target >= CellShipTopDestroyed && target <= CellShipVerticalDestroyed;
 }
 
-Buffer grid(CellState status[ROW][COLUMN], Vec2 cursor) {
+Buffer grid(CellState status[ROW][COLUMN], Vec2 cursor, Vec2 preparing_cursor) {
 	int width = 7;
 	int height = 3;
 	int full_width = width + 3;
@@ -253,6 +253,9 @@ Buffer grid(CellState status[ROW][COLUMN], Vec2 cursor) {
 				char* color_start = "";
 				char* color_end = "";
 				if (cursor.x == j && cursor.y == i / full_height) {
+					color_start = "\e[7m";
+					color_end = "\e[0m";
+				} else if (preparing_cursor.x == j && preparing_cursor.y == i / full_height) {
 					color_start = "\e[100m";
 					color_end = "\e[0m";
 				}
@@ -284,8 +287,8 @@ Buffer game_ui(GameStatus* status) {
 	} else {
 		left_cursor = status->cursor;
 	}
-	Buffer left = grid(status->enemy_status, left_cursor);
-	Buffer right = grid(status->self_status, right_cursor);
+	Buffer left = grid(status->enemy_status, left_cursor, (Vec2){ .x = -1, .y = -1, });
+	Buffer right = grid(status->self_status, right_cursor, status->preparing_cursor);
 	assert(left.size.y == right.size.y);
 
 	uint16_t top_bar_y = 3;
