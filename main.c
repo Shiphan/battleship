@@ -375,12 +375,17 @@ Buffer end_ui(GameStatus* status) {
 			"                          /____/   ",
 		};
 
-		uint16_t x = strlen(output[0]);
+		int padding = 11;
+		uint16_t x = strlen(output[0]) + padding * 2;
 		uint16_t y = sizeof(output) / sizeof(output[0]);
 
 		char** arr = malloc(y * sizeof(char*));
 		for (int i = 0; i < y; i++) {
-			arr[i] = strdup(output[i]);
+			if (i == 2) {
+				asprintf(&arr[i], "\e[7m" "%5d // " "\e[0m" "  %s  " "\e[7m" " // %-5d" "\e[0m", status->enemy_hp, output[i], status->self_hp); 
+			} else {
+				asprintf(&arr[i], "%*s%s%*s", padding, "", output[i], padding, ""); 
+			}
 		}
 		return (Buffer){
 			.ptr = arr,
@@ -395,12 +400,17 @@ Buffer end_ui(GameStatus* status) {
 			"/_____/\\___/_/  \\___/\\__,_/\\__/  ",
 		};
 
-		uint16_t x = strlen(output[0]);
+		int padding = 11;
+		uint16_t x = strlen(output[0]) + padding * 2;
 		uint16_t y = sizeof(output) / sizeof(output[0]);
 
 		char** arr = malloc(y * sizeof(char*));
 		for (int i = 0; i < y; i++) {
-			arr[i] = strdup(output[i]);
+			if (i == 2) {
+				asprintf(&arr[i], "\e[7m" "%5d // " "\e[0m" "  %s  " "\e[7m" " // %-5d" "\e[0m", status->enemy_hp, output[i], status->self_hp); 
+			} else {
+				asprintf(&arr[i], "%*s%s%*s", padding, "", output[i], padding, ""); 
+			}
 		}
 		return (Buffer){
 			.ptr = arr,
