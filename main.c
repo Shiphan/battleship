@@ -759,10 +759,9 @@ Size termial_size(void) {
 }
 
 void enter_alter_screen(void) {
-	// 7: save cursor position
-	// [?47h: alter screen
+	// [?1049h: alter screen
 	// [?25l: hide cursor
-	printf("\e7" "\e[?47h" "\e[?25l");
+	printf("\e[?1049h" "\e[?25l");
 
 	struct termios attr;
 	tcgetattr(STDIN_FILENO, &attr);
@@ -774,14 +773,14 @@ void enter_alter_screen(void) {
 
 void leave_alter_screen(void) {
 	tcsetattr(STDIN_FILENO, TCSAFLUSH, &old_terminal_attr);
-	printf("\e[2J\e[?25h\e[?47l\e8");
+	printf("\e[?25h" "\e[?1049l");
 }
 
 void print_ui(Buffer buf) {
 	Size size = termial_size();
 	char* buffer = ui_wrapper(buf, size);
 	// \e[2j: remove old output
-	printf("\e[2J%s", buffer);
+	printf("\e[1;1H\e[0J%s", buffer);
 	fflush(stdout);
 	free(buffer);
 }
