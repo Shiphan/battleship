@@ -198,7 +198,7 @@ typedef struct Status {
 	} creating;
 	struct {
 		JoinSelection selection;
-		char connect_addr[32]; 
+		char connect_addr[32];
 		size_t cursor;
 	} join;
 } Status;
@@ -329,7 +329,7 @@ Buffer game_ui(GameStatus* status) {
 			right_preparing = "xxx";
 		}
 
-		asprintf(&arr[1], "?? %s  %s <> %s  %s ??", left_hp_bar, left_preparing, right_preparing, right_hp_bar); 
+		asprintf(&arr[1], "?? %s  %s <> %s  %s ??", left_hp_bar, left_preparing, right_preparing, right_hp_bar);
 
 		free(left_hp_bar);
 		free(right_hp_bar);
@@ -352,7 +352,7 @@ Buffer game_ui(GameStatus* status) {
 			turn = "  <<< <>      ";
 		}
 
-		asprintf(&arr[1], "%-3d%s%s%s%3d", status->enemy_hp, left_hp_bar, turn, right_hp_bar, status->self_hp); 
+		asprintf(&arr[1], "%-3d%s%s%s%3d", status->enemy_hp, left_hp_bar, turn, right_hp_bar, status->self_hp);
 
 		free(left_hp_bar);
 		free(right_hp_bar);
@@ -382,9 +382,9 @@ Buffer end_ui(GameStatus* status) {
 		char** arr = malloc(y * sizeof(char*));
 		for (int i = 0; i < y; i++) {
 			if (i == 2) {
-				asprintf(&arr[i], "\e[7m" "%5d // " "\e[0m" "  %s  " "\e[7m" " // %-5d" "\e[0m", status->enemy_hp, output[i], status->self_hp); 
+				asprintf(&arr[i], "\e[7m" "%5d // " "\e[0m" "  %s  " "\e[7m" " // %-5d" "\e[0m", status->enemy_hp, output[i], status->self_hp);
 			} else {
-				asprintf(&arr[i], "%*s%s%*s", padding, "", output[i], padding, ""); 
+				asprintf(&arr[i], "%*s%s%*s", padding, "", output[i], padding, "");
 			}
 		}
 		return (Buffer){
@@ -407,9 +407,9 @@ Buffer end_ui(GameStatus* status) {
 		char** arr = malloc(y * sizeof(char*));
 		for (int i = 0; i < y; i++) {
 			if (i == 2) {
-				asprintf(&arr[i], "\e[7m" "%5d // " "\e[0m" "  %s  " "\e[7m" " // %-5d" "\e[0m", status->enemy_hp, output[i], status->self_hp); 
+				asprintf(&arr[i], "\e[7m" "%5d // " "\e[0m" "  %s  " "\e[7m" " // %-5d" "\e[0m", status->enemy_hp, output[i], status->self_hp);
 			} else {
-				asprintf(&arr[i], "%*s%s%*s", padding, "", output[i], padding, ""); 
+				asprintf(&arr[i], "%*s%s%*s", padding, "", output[i], padding, "");
 			}
 		}
 		return (Buffer){
@@ -566,7 +566,7 @@ Buffer waiting_client(uint16_t port) {
 	arr[0] = strdup("Waiting for connection...");
 	arr[2] = strdup("                         ");
 	char* old;
-	asprintf(&old, "port %d", port); 
+	asprintf(&old, "port %d", port);
 
 	char* padding;
 	asprintf(&padding, "%*s", (int)(strlen(arr[0]) - strlen(old)) / 2, "");
@@ -574,7 +574,7 @@ Buffer waiting_client(uint16_t port) {
 	if ((strlen(arr[0]) - strlen(old)) % 2 != 0) {
 		right = " ";
 	}
-	asprintf(&arr[1], "%s%s%s%s", padding, old, padding, right); 
+	asprintf(&arr[1], "%s%s%s%s", padding, old, padding, right);
 	free(old);
 	free(padding);
 
@@ -594,7 +594,7 @@ Buffer waiting_server(char* addr) {
 	arr[0] = strdup("  Waiting for connection...  ");
 	arr[2] = strdup("                             ");
 	char* old;
-	asprintf(&old, "Address %s", addr); 
+	asprintf(&old, "Address %s", addr);
 
 	char* padding;
 	asprintf(&padding, "%*s", (int)(strlen(arr[0]) - strlen(old)) / 2, "");
@@ -602,7 +602,7 @@ Buffer waiting_server(char* addr) {
 	if ((strlen(arr[0]) - strlen(old)) % 2 != 0) {
 		right = " ";
 	}
-	asprintf(&arr[1], "%s%s%s%s", padding, old, padding, right); 
+	asprintf(&arr[1], "%s%s%s%s", padding, old, padding, right);
 	free(old);
 	free(padding);
 
@@ -750,7 +750,7 @@ char* ui_wrapper(Buffer buf, Size size) {
 
 Size termial_size(void) {
 	struct winsize window_size;
-	int err = ioctl(STDOUT_FILENO, TIOCGWINSZ, &window_size); 
+	int err = ioctl(STDOUT_FILENO, TIOCGWINSZ, &window_size);
 	assert(err != -1);
 	return (Size){
 		.x = window_size.ws_col,
@@ -1439,7 +1439,7 @@ void handle_game_action(Status* status) {
 			char* end;
 			status->game.enemy_max_hp = strtoul(parms, &end, 10);
 			assert(end != parms);
-			status->game.enemy_hp = status->game.enemy_max_hp; 
+			status->game.enemy_hp = status->game.enemy_max_hp;
 			status->game.enemy_preparing = false;
 		} else if (string_has_prefix(buf, "IGNORE")) {
 			assert(parms == NULL);
