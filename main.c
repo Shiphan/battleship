@@ -687,23 +687,26 @@ char* ui_wrapper(Buffer buf, Size size) {
 	if (buf.size.x > size.x || buf.size.y > size.y) {
 		free_buffer(&buf);
 
-		char* result;
+		char* message;
 		int err = asprintf(
-			&result,
-			"The terminal is too small (%d x %d), and it should at least be %d x %d.\n",
+			&message,
+			"The terminal is too small (%d x %d), and it should at least be %d x %d.",
 			size.x, size.y, buf.size.x, buf.size.y
 		);
 		assert(err != -1);
 
-		if (size.y > 0 && strlen(result) <= size.x) {
+		if (size.y > 0 && strlen(message) <= size.x) {
 			char** arr = malloc(1 * sizeof(char*));
-			arr[0] = result;
+			arr[0] = message;
 			return ui_wrapper((Buffer){
 				.ptr = arr,
-				.size = { .x = strlen(result), .y = 1, },
+				.size = { .x = strlen(message), .y = 1, },
 			}, size);
 		}
-
+		char* result;
+		err = asprintf(&result, "%s\e[0J\n", message);
+		assert(err != -1);
+		free(message);
 		return result;
 	}
 
