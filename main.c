@@ -725,17 +725,20 @@ char* ui_wrapper(Buffer buf, Size size) {
 		right_padding = padding_s;
 	}
 
-	char* result = malloc(1 * sizeof(char));
-	result[0] = '\0';
+	char* result = strdup("");
 	for (int line = 0; line < size.y; line++) {
 		char* old_result = result;
 		result = NULL;
+		char* line_ending = "\n";
+		if (line == 0) {
+			line_ending = "";
+		}
 		// top & bottom padding
 		if (line < top || line - top >= buf.size.y) {
-			int err = asprintf(&result, "%s\n%s", old_result, y_padding); 
+			int err = asprintf(&result, "%s%s%s", old_result, line_ending, y_padding);
 			assert(err != -1);
 		} else {
-			int err = asprintf(&result, "%s\n%s%s%s%s", old_result, x_padding, buf.ptr[line - top], x_padding, right_padding);
+			int err = asprintf(&result, "%s%s%s%s%s%s", old_result, line_ending, x_padding, buf.ptr[line - top], x_padding, right_padding);
 			assert(err != -1);
 		}
 		free(old_result);
@@ -762,6 +765,7 @@ void enter_alter_screen(void) {
 	// [?1049h: alter screen
 	// [?25l: hide cursor
 	printf("\e[?1049h" "\e[?25l");
+	fflush(stdout);
 
 	struct termios attr;
 	tcgetattr(STDIN_FILENO, &attr);
@@ -774,13 +778,16 @@ void enter_alter_screen(void) {
 void leave_alter_screen(void) {
 	tcsetattr(STDIN_FILENO, TCSAFLUSH, &old_terminal_attr);
 	printf("\e[?25h" "\e[?1049l");
+	fflush(stdout);
 }
 
 void print_ui(Buffer buf) {
 	Size size = termial_size();
 	char* buffer = ui_wrapper(buf, size);
 	// \e[2j: remove old output
-	printf("\e[1;1H\e[0J%s", buffer);
+	// \e[1,1H: move cursor to top left
+	char* control = "\e[1;1H";
+	printf("%s%s", control, buffer);
 	fflush(stdout);
 	free(buffer);
 }
