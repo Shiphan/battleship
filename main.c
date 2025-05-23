@@ -1514,7 +1514,8 @@ void handle_actions(Status* status) {
 			}
 
 			int err = connect(status->sock_fd, (struct sockaddr*)&addr, sizeof(addr));
-			if (err == 0) {
+			// openbsd will have error code EISCONN when connected
+			if (err == 0 || errno == EISCONN) {
 				status->page = Game;
 				status->game.my_turn = false;
 			} else if (errno != EAGAIN && errno != EALREADY && errno != EINPROGRESS) {
