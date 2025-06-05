@@ -1,0 +1,270 @@
+#include <arpa/inet.h>
+#include <assert.h>
+#include <errno.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <pthread.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#define KEY_LEN 5
+#define BUFFER_LEN 256
+
+typedef struct Entry {
+	char key[KEY_LEN + 1];
+	int wait_sock_fd;
+} Entry;
+
+// FIXME: entry vector will only grow but never shrink
+typedef struct EntryVector {
+	Entry* ptr;
+	size_t len;
+	size_t cap;
+	pthread_mutex_t mutex;
+} EntryVector;
+
+typedef struct WaitThreadInfo {
+	int sock_fd;
+	EntryVector* entrys;
+} WaitThreadInfo;
+
+typedef struct WorkThreadInfo {
+	int read_sock_fd;
+	int write_sock_fd;
+} WorkThreadInfo;
+
+bool streq(const char* a, const char* b) {
+	return strcmp(a, b) == 0;
+}
+
+bool is_valid_key(char* key) {
+	size_t len = strlen(key);
+	if (len != KEY_LEN) {
+		return false;
+	}
+	for (int i = 0; i < len; i++) {
+		if (key[i] < 'a' || key[i] > 'z') {
+			return false;
+		}
+	}
+	return true;
+}
+
+void* work_thread(void* raw_info) {
+	WorkThreadInfo* info = (WorkThreadInfo*)raw_info;
+	int read_sock_fd = info->read_sock_fd;
+	int write_sock_fd = info->write_sock_fd;
+	char* message = "CONNECTED";
+	ssize_t written = write(write_sock_fd, message, strlen(message));
+
+	while (true) {
+		char buf[BUFFER_LEN] = {0};
+		ssize_t readed = read(read_sock_fd, buf, sizeof(buf) - 1);
+		if (readed == -1) {
+			fprintf(stderr, "[ERROR] %s (line: %d)\n", strerror(errno), __LINE__);
+			break;
+		} else if (readed == 0) {
+			printf("[LOG] a socket ended\n");
+			break;
+		}
+
+		ssize_t written = write(write_sock_fd, buf, readed);
+		if (written == -1) {
+			fprintf(stderr, "[ERROR] %s (line: %d)\n", strerror(errno), __LINE__);
+		} else if (written != readed) {
+			fprintf(stderr, "[ERROR] not all readed bytes are written to the write_sock (%ld / %ld) (line: %d)\n", written, readed, __LINE__);
+		}
+	}
+
+	close(read_sock_fd);
+	close(write_sock_fd);
+	free(raw_info);
+	return NULL;
+}
+
+void* wait_thread(void* raw_info) {
+	WaitThreadInfo* info = (WaitThreadInfo*)raw_info;
+	EntryVector* entrys = info->entrys;
+
+	printf("[LOG] wait for a key\n");
+	char buf[1024] = {0};
+	ssize_t readed = read(info->sock_fd, buf, sizeof(buf) - 1);
+	if (readed == -1) {
+		fprintf(stderr, "[ERROR] %s (line: %d)\n", strerror(errno), __LINE__);
+	}
+	if (is_valid_key(buf)) {
+		printf("[LOG] new key: `%s`\n", buf);
+		int err = pthread_mutex_lock(&entrys->mutex);
+		assert(err == 0);
+
+		bool found = false;
+		size_t index = 0;
+		while (!found && index < entrys->len) {
+			if (streq(buf, entrys->ptr[index].key)) {
+				found = true;
+			} else {
+				index += 1;
+			}
+		}
+		if (found) {
+			int sock1_fd = entrys->ptr->wait_sock_fd;
+			int sock2_fd = info->sock_fd;
+
+			entrys->len -= 1;
+			for (size_t i = index; i < entrys->len; i ++) {
+				entrys->ptr[i] = entrys->ptr[i + 1];
+			}
+
+			int err = pthread_mutex_unlock(&entrys->mutex);
+			assert(err == 0);
+
+			{
+				WorkThreadInfo* work_info = malloc(sizeof(WorkThreadInfo));
+				*work_info = (WorkThreadInfo){
+					.read_sock_fd = entrys->ptr->wait_sock_fd,
+					.write_sock_fd = info->sock_fd,
+				};
+
+				pthread_t thread;
+				pthread_attr_t attr;
+				int err = pthread_create(&thread, &attr, work_thread, work_info);
+				if (err != 0) {
+					fprintf(stderr, "[ERROR] %s (line: %d)\n", strerror(err), __LINE__);
+				}
+			}
+
+			{
+				WorkThreadInfo* work_info = malloc(sizeof(WorkThreadInfo));
+				*work_info = (WorkThreadInfo){
+					.read_sock_fd = dup(info->sock_fd),
+					.write_sock_fd = dup(entrys->ptr->wait_sock_fd),
+				};
+				assert(work_info->read_sock_fd != -1);
+				assert(work_info->write_sock_fd != -1);
+
+				pthread_t thread;
+				pthread_attr_t attr;
+				int err = pthread_create(&thread, &attr, work_thread, work_info);
+				if (err != 0) {
+					fprintf(stderr, "[ERROR] %s (line: %d)\n", strerror(err), __LINE__);
+				}
+			}
+		} else {
+			assert(entrys->len <= entrys->cap);
+			if (entrys->len == entrys->cap) {
+				entrys->cap *= 2;
+				Entry* new_ptr = realloc(entrys->ptr, entrys->cap * sizeof(Entry));
+				assert(new_ptr != NULL);
+				entrys->ptr = new_ptr;
+			}
+			entrys->ptr[entrys->len] = (Entry){
+				.key = {0},
+				.wait_sock_fd = info->sock_fd,
+			};
+			strncpy(entrys->ptr[entrys->len].key, buf, KEY_LEN);
+			entrys->len += 1;
+
+			int err = pthread_mutex_unlock(&entrys->mutex);
+			assert(err == 0);
+		}
+	} else {
+		printf("[LOG] invalid key format\n");
+		char* message = "error: invalid connection";
+		ssize_t written = write(info->sock_fd, message, strlen(message));
+		if (written == -1) {
+			fprintf(stderr, "[ERROR] %s (line: %d)\n", strerror(errno), __LINE__);
+		} else if (written != strlen(message)) {
+			fprintf(stderr, "[ERROR] not all readed bytes are written to the write_sock (%ld / %ld) (line: %d)\n", written, strlen(message), __LINE__);
+		}
+		close(info->sock_fd);
+	}
+
+	free(raw_info);
+	return NULL;
+}
+
+int main(int argc, char** argv) {
+	if (argc != 2) {
+		printf("usage: %s <port>\n", argv[0]);
+		return 0;
+	}
+
+	uint16_t port;
+	{
+		char* end;
+		uint64_t tmp_port = strtoul(argv[1], &end, 10);
+		if (end == argv[1]) {
+			fprintf(stderr, "[ERROR] the port `%s` is not a number (line: %d)\n", argv[1], __LINE__);
+			return 1;
+		}
+		if (tmp_port > UINT16_MAX) {
+			fprintf(stderr, "[ERROR] the port `%s` is too big for a port (line: %d)\n", argv[1], __LINE__);
+			return 1;
+		}
+		port = tmp_port;
+	}
+
+	int sock_fd = socket(AF_INET, SOCK_STREAM, 0);
+	if (sock_fd == -1) {
+		fprintf(stderr, "[ERROR] %s (line: %d)\n", strerror(errno), __LINE__);
+		return errno;
+	}
+
+	struct sockaddr_in addr;
+	addr.sin_family = AF_INET;
+	addr.sin_port = htons(port);
+	addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	int err = bind(sock_fd, (struct sockaddr*)&addr, sizeof(addr));
+	if (err == -1) {
+		fprintf(stderr, "[ERROR] %s (line: %d)\n", strerror(errno), __LINE__);
+		return errno;
+	}
+
+	err = listen(sock_fd, SOMAXCONN);
+	if (err == -1) {
+		return errno;
+	}
+
+	EntryVector entrys = {
+		.ptr = malloc(16 * sizeof(Entry)),
+		.len = 0,
+		.cap = 16,
+		.mutex = PTHREAD_MUTEX_INITIALIZER,
+	};
+
+	while (true) {
+		int accepted_fd = accept(sock_fd, NULL, NULL);
+		if (accepted_fd == -1) {
+			fprintf(stderr, "[ERROR] %s (line: %d)\n", strerror(errno), __LINE__);
+			return errno;
+		}
+		printf("[LOG] a new connection\n");
+		
+		WaitThreadInfo* info = malloc(sizeof(WaitThreadInfo));
+		*info = (WaitThreadInfo){
+			.sock_fd = accepted_fd,
+			.entrys = &entrys,
+		};
+		pthread_t thread;
+		int err = pthread_create(&thread, NULL, wait_thread, info);
+		if (err != 0) {
+			fprintf(stderr, "[ERROR] %s (line: %d)\n", strerror(err), __LINE__);
+			return err;
+		}
+		err = pthread_detach(thread);
+		if (err != 0) {
+			fprintf(stderr, "[ERROR] %s (line: %d)\n", strerror(err), __LINE__);
+			return err;
+		}
+	}
+
+	return 0;
+}
+

@@ -140,35 +140,64 @@ typedef struct Buffer {
 
 typedef enum Page {
 	Greeting = 0,
+	DirectConnect,
+	ConnectingRelayServer,
 	Creating,
 	Join,
+	EnterRelayServerKey,
 	WaitingClient,
 	WaitingServer,
+	WaitingRelayServer,
+	WaitingOtherPlayer,
 	Game,
 	End,
 	Error,
 } Page;
 
+#define SELECTION_EXIT 2
+#define SELECTION_TYPING 8
+#define SELECTION_INPUT 0
+
 typedef enum GreetingSelection {
 	GreetingNone = -1,
-	GreetingCreate = 0,
-	GreetingJoin,
-	GreetingExit,
+	GreetingDirectConnect = 0,
+	GreetingRelayServer,
+	GreetingExit = SELECTION_EXIT,
 } GreetingSelection;
 
+typedef enum DirectConnectSelection {
+	DirectConnectNone = -1,
+	DirectConnectCreate = 0,
+	DirectConnectJoin,
+	DirectConnectExit = SELECTION_EXIT,
+} DirectConnectSelection;
+
 typedef enum CreatingSelection {
-	CreatingTyping = 0,
-	CreatingInput,
+	CreatingInput = SELECTION_INPUT,
 	CreatingCreate,
-	CreatingExit,
+	CreatingExit = SELECTION_EXIT,
+	CreatingTyping = SELECTION_TYPING,
 } CreatingSelection;
 
 typedef enum JoinSelection {
-	JoinTyping = 0,
-	JoinInput,
-	JoinCreate,
-	JoinExit,
+	JoinInput = SELECTION_INPUT,
+	JoinConnect,
+	JoinExit = SELECTION_EXIT,
+	JoinTyping = SELECTION_TYPING,
 } JoinSelection;
+
+typedef enum ConnectRelayServerSelection {
+	ConnectRelayServerInput = SELECTION_INPUT,
+	ConnectRelayServerConnect,
+	ConnectRelayServerExit = SELECTION_EXIT,
+	ConnectRelayServerTyping = SELECTION_TYPING,
+} ConnectRelayServerSelection;
+
+typedef enum EnterRelayServerKeySelection {
+	EnterRelayServerKeyInput = SELECTION_INPUT,
+	EnterRelayServerKeySend,
+	EnterRelayServerKeyTyping = SELECTION_TYPING,
+} EnterRelayServerKeySelection;
 
 typedef struct GameStatus {
 	CellState self_status[ROW][COLUMN];
@@ -192,6 +221,19 @@ typedef struct Status {
 	struct {
 		GreetingSelection selection;
 	} greeting;
+	struct {
+		DirectConnectSelection selection;
+	} direct_connect;
+	struct {
+		ConnectRelayServerSelection selection;
+		char connect_addr[32];
+		size_t cursor;
+		struct {
+			char value[6];
+			size_t cursor;
+			EnterRelayServerKeySelection selection;
+		} key;
+	} relay_server;
 	struct {
 		CreatingSelection selection;
 		int32_t port;
@@ -218,6 +260,43 @@ bool streq(const char* a, const char* b) {
 
 bool string_has_prefix(const char* str, const char* prefix) {
 	return strncmp(str, prefix, strlen(prefix)) == 0;
+}
+
+struct sockaddr_in string_to_sockaddr(char* str) {
+	char buf[32] = {0};
+	strncpy(buf, str, 32);
+	char* addr_ip;
+	char* addr_port;
+	{
+		char* save;
+		addr_ip = strtok_r(buf, ":", &save);
+		addr_port = strtok_r(NULL, ":", &save);
+		assert(addr_ip == buf);
+		assert(addr_port != NULL);
+		assert(addr_port != buf);
+	}
+	uint16_t port;
+	{
+		char* end;
+		uint64_t tmp_port = strtoul(addr_port, &end, 10);
+		assert(end != addr_port);
+		assert(tmp_port <= UINT16_MAX);
+		port = tmp_port;
+	}
+
+	struct sockaddr_in addr = {
+		.sin_family = AF_INET,
+		.sin_port = htons(port),
+	};
+	if (streq(addr_ip, "localhost")) {
+		addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	} else {
+		in_addr_t tmp_addr = inet_addr(addr_ip);
+		assert(tmp_addr != -1);
+		addr.sin_addr.s_addr = tmp_addr;
+	}
+
+	return addr;
 }
 
 bool cell_is_ship_not_destroyed(CellState target) {
@@ -421,19 +500,13 @@ Buffer end_ui(GameStatus* status) {
 	}
 }
 
-Buffer greeting_options(GreetingSelection selection) {
-	char* options[] = {
-		"- Start a game",
-		"- Join a game ",
-		"- Exit        ",
-	};
-
+Buffer normal_options(int selection, char** options, size_t options_len) {
 	uint16_t x = strlen(options[0]);
-	uint16_t y = sizeof(options)/ sizeof(options[0]);
+	uint16_t y = options_len;
 
 	char** arr = malloc(y * sizeof(char*));
 
-	for (int i = 0; i < 3; i++) {
+	for (int i = 0; i < y; i++) {
 		char* color_start = "";
 		char* color_end = "";
 		if (i == selection) {
@@ -449,6 +522,79 @@ Buffer greeting_options(GreetingSelection selection) {
 		.ptr = arr,
 		.size = { .x = x, .y = y, },
 	};
+}
+
+Buffer string_input_options(int selection, char* content, int content_width, char* content_prefix, char** options, size_t options_len) {
+	char* color_start = "";
+	char* color_end = "";
+	char* buf;
+	if (selection == SELECTION_TYPING) {
+		color_start = "\e[7m";
+		color_end = "\e[0m";
+	}
+	asprintf(&buf, "%s%s%*s%s", content_prefix, color_start, content_width, content, color_end);
+
+	uint16_t x = strlen(content_prefix) + content_width;
+	uint16_t y = options_len + 1;
+
+	char** arr = malloc(y * sizeof(char*));
+
+	color_start = "";
+	color_end = "";
+	if (selection == SELECTION_INPUT) {
+		color_start = "\e[7m";
+		color_end = "\e[0m";
+	}
+	asprintf(&arr[0], "%s%s%s", color_start, buf, color_end);
+	free(buf);
+
+	char* padding;
+	asprintf(&padding, "%*s", (int)(x - strlen(options[0])) / 2, "");
+	char* right = "";
+	if ((x - strlen(options[0])) % 2 != 0) {
+		right = " ";
+	}
+	for (int i = 0; i < options_len; i++) {
+		char* color_start = "";
+		char* color_end = "";
+		if (i == selection - 1) {
+			color_start = "\e[7m";
+			color_end = "\e[0m";
+		}
+		asprintf(&arr[i + 1], "%s%s%s%s%s%s", color_start, padding, options[i], padding, right, color_end);
+	}
+	free(padding);
+
+	return (Buffer){
+		.ptr = arr,
+		.size = { .x = x, .y = y, },
+	};
+}
+
+Buffer greeting_options(GreetingSelection selection) {
+	char* options[] = {
+		"- Direct connect    ",
+		"- Use a relay server",
+		"- Exit              ",
+	};
+	return normal_options(selection, options, sizeof(options) / sizeof(options[0]));
+}
+
+Buffer direct_connect_options(DirectConnectSelection selection) {
+	char* options[] = {
+		"- Start a game",
+		"- Join a game ",
+		"- Back        ",
+	};
+	return normal_options(selection, options, sizeof(options) / sizeof(options[0]));
+}
+
+Buffer connect_relay_server_options(char* addr, ConnectRelayServerSelection selection) {
+	char* options[2] = {
+		"- Join  ",
+		"- Cancel",
+	};
+	return string_input_options(selection, addr, 22, "Address: ", options, sizeof(options) / sizeof(options[0]));
 }
 
 Buffer creating_options(int32_t port, CreatingSelection selection) {
@@ -479,7 +625,7 @@ Buffer creating_options(int32_t port, CreatingSelection selection) {
 	asprintf(&arr[0], "%s%s%s", color_start, buf, color_end);
 	free(buf);
 
-	char* options[2] = {
+	char* options[] = {
 		"- Create",
 		"- Cancel",
 	};
@@ -492,7 +638,7 @@ Buffer creating_options(int32_t port, CreatingSelection selection) {
 	for (int i = 0; i < 2; i++) {
 		char* color_start = "";
 		char* color_end = "";
-		if (i == selection - 2) {
+		if (i == selection - 1) {
 			color_start = "\e[7m";
 			color_end = "\e[0m";
 		}
@@ -508,49 +654,50 @@ Buffer creating_options(int32_t port, CreatingSelection selection) {
 
 Buffer join_options(char* addr, JoinSelection selection) {
 	// 123.123.123.123:12345
-	char* color_start = "";
-	char* color_end = "";
-	char* buf;
-	if (selection == JoinTyping) {
-		color_start = "\e[7m";
-		color_end = "\e[0m";
-	}
-	asprintf(&buf, "Address: %s%22s%s", color_start, addr, color_end);
-
-	uint16_t x = strlen("Address: ") + 22;
-	uint16_t y = 3;
-
-	char** arr = malloc(y * sizeof(char*));
-
-	color_start = "";
-	color_end = "";
-	if (selection == JoinInput) {
-		color_start = "\e[7m";
-		color_end = "\e[0m";
-	}
-	asprintf(&arr[0], "%s%s%s", color_start, buf, color_end);
-	free(buf);
-
-	char* options[2] = {
+	char* options[] = {
 		"- Join  ",
 		"- Cancel",
 	};
-	char* padding;
-	asprintf(&padding, "%*s", (int)(x - strlen(options[0])) / 2, "");
-	char* right = "";
-	if ((x - strlen(options[0])) % 2 != 0) {
-		right = " ";
-	}
-	for (int i = 0; i < 2; i++) {
-		char* color_start = "";
-		char* color_end = "";
-		if (i == selection - 2) {
-			color_start = "\e[7m";
-			color_end = "\e[0m";
+	return string_input_options(selection, addr, 22, "Address: ", options, sizeof(options) / sizeof(options[0]));
+}
+
+Buffer enter_relay_server_key_options(char* key, EnterRelayServerKeySelection selection) {
+	char* options[] = {
+		"- Send  ",
+	};
+	return string_input_options(selection, key, 10, "Key: ", options, sizeof(options) / sizeof(options[0]));
+}
+
+Buffer normal_waiting(char* message, char* info_prefix, char* info) {
+	uint16_t y = 2;
+
+	char** arr = malloc(y * sizeof(char*));
+
+	arr[0] = strdup(message);
+	asprintf(&arr[1], "%s%s", info_prefix, info);
+
+	uint16_t x = 0;
+	for (int i = 0; i < y; i++) {
+		size_t len = strlen(arr[i]);
+		if (len > x) {
+			x = len;
 		}
-		asprintf(&arr[i + 1], "%s%s%s%s%s%s", color_start, padding, options[i], padding, right, color_end);
 	}
-	free(padding);
+	for (int i = 0; i < y; i++) {
+		size_t len = strlen(arr[i]);
+		if (len < x) {
+			char* padding;
+			asprintf(&padding, "%*s", (int)(x - len) / 2, "");
+			char* right = "";
+			if ((x - len) % 2 != 0) {
+				right = " ";
+			}
+			char* old = arr[i];
+			asprintf(&arr[i], "%s%s%s%s", padding, old, padding, right);
+			free(old);
+			free(padding);
+		}
+	}
 
 	return (Buffer){
 		.ptr = arr,
@@ -559,59 +706,21 @@ Buffer join_options(char* addr, JoinSelection selection) {
 }
 
 Buffer waiting_client(uint16_t port) {
-	uint16_t y = 3;
-
-	char** arr = malloc(y * sizeof(char*));
-
-	arr[0] = strdup("Waiting for connection...");
-	arr[2] = strdup("                         ");
-	char* old;
-	asprintf(&old, "port %d", port);
-
-	char* padding;
-	asprintf(&padding, "%*s", (int)(strlen(arr[0]) - strlen(old)) / 2, "");
-	char* right = "";
-	if ((strlen(arr[0]) - strlen(old)) % 2 != 0) {
-		right = " ";
-	}
-	asprintf(&arr[1], "%s%s%s%s", padding, old, padding, right);
-	free(old);
-	free(padding);
-
-	uint16_t x = strlen(arr[0]);
-
-	return (Buffer){
-		.ptr = arr,
-		.size = { .x = x, .y = y, },
-	};
+	char buf[16];
+	snprintf(buf, sizeof(buf), "%d", port);
+	return normal_waiting("Waiting for connection...", "Port ", buf);
 }
 
 Buffer waiting_server(char* addr) {
-	uint16_t y = 3;
+	return normal_waiting("Waiting for connection...", "Address ", addr);
+}
 
-	char** arr = malloc(y * sizeof(char*));
+Buffer waiting_relay_server(char* addr) {
+	return normal_waiting("Waiting for relay server...", "Address ", addr);
+}
 
-	arr[0] = strdup("  Waiting for connection...  ");
-	arr[2] = strdup("                             ");
-	char* old;
-	asprintf(&old, "Address %s", addr);
-
-	char* padding;
-	asprintf(&padding, "%*s", (int)(strlen(arr[0]) - strlen(old)) / 2, "");
-	char* right = "";
-	if ((strlen(arr[0]) - strlen(old)) % 2 != 0) {
-		right = " ";
-	}
-	asprintf(&arr[1], "%s%s%s%s", padding, old, padding, right);
-	free(old);
-	free(padding);
-
-	uint16_t x = strlen(arr[0]);
-
-	return (Buffer){
-		.ptr = arr,
-		.size = { .x = x, .y = y, },
-	};
+Buffer waiting_other_player(char* key) {
+	return normal_waiting("Waiting for other player...", "Key ", key);
 }
 
 Buffer greeting_screen(Buffer options) {
@@ -657,8 +766,11 @@ Buffer greeting_screen(Buffer options) {
 	}
 	for (int i = 0; i < 3; i++) {
 		char* buffer;
-	asprintf(&buffer, "%s%s%s%s%s%s", other, padding, options.ptr[i], padding, right, other);
-
+		if (i < options.size.y) {
+			asprintf(&buffer, "%s%s%s%s%s%s", other, padding, options.ptr[i], padding, right, other);
+		} else {
+			asprintf(&buffer, "%s%39s%s", other, "", other);
+		}
 		arr[sizeof(top_part) / sizeof(top_part[0]) + i] = buffer;
 	}
 	free(padding);
@@ -800,14 +912,14 @@ void handle_greeting_key_event(Status* status, int key) {
 	switch (key) {
 		case 'j': case 's':
 			if (*selection < 0 || *selection > GreetingExit) {
-				*selection = GreetingCreate;
+				*selection = GreetingDirectConnect;
 			} else if (*selection < GreetingExit) {
 				*selection += 1;
 			}
 			break;
 		case 'k': case 'w':
 			if (*selection < 0 || *selection > GreetingExit) {
-				*selection = GreetingCreate;
+				*selection = GreetingDirectConnect;
 			} else if (*selection > 0){
 				*selection -= 1;
 			}
@@ -816,15 +928,108 @@ void handle_greeting_key_event(Status* status, int key) {
 			switch (*selection) {
 				case GreetingNone:
 					break;
-				case GreetingCreate:
-					status->page = Creating;
+				case GreetingDirectConnect:
+					status->page = DirectConnect;
 					break;
-				case GreetingJoin:
-					status->page = Join;
+				case GreetingRelayServer:
+					status->page = ConnectingRelayServer;
 					break;
 				case GreetingExit:
 					status->running = false;
 					break;
+			}
+			break;
+	}
+}
+
+void handle_direct_connect_key_event(Status* status, int key) {
+	DirectConnectSelection* selection = &status->direct_connect.selection;
+	switch (key) {
+		case 'j': case 's':
+			if (*selection < 0 || *selection > DirectConnectExit) {
+				*selection = DirectConnectCreate;
+			} else if (*selection < DirectConnectExit) {
+				*selection += 1;
+			}
+			break;
+		case 'k': case 'w':
+			if (*selection < 0 || *selection > DirectConnectExit) {
+				*selection = DirectConnectCreate;
+			} else if (*selection > 0){
+				*selection -= 1;
+			}
+			break;
+		case '\n':
+			switch (*selection) {
+				case DirectConnectNone:
+					break;
+				case DirectConnectCreate:
+					status->page = Creating;
+					break;
+				case DirectConnectJoin:
+					status->page = Join;
+					break;
+				case DirectConnectExit:
+					status->page = Greeting;
+					break;
+			}
+			break;
+	}
+}
+
+void handle_connecting_relay_server_key_event(Status* status, int key) {
+	if (status->relay_server.selection == ConnectRelayServerTyping) {
+		if ((key >= '0' && key <= '9') || (key >= 'a' && key <= 'z') || key == '.' || key == ':') {
+			if (status->relay_server.cursor > 21) {
+				return;
+			}
+			status->relay_server.connect_addr[status->relay_server.cursor] = key;
+			status->relay_server.cursor += 1;
+		} else if (key == '\x7f') {
+			if (status->relay_server.cursor > 0) {
+				status->relay_server.cursor -= 1;
+				status->relay_server.connect_addr[status->relay_server.cursor] = '\0';
+			}
+		} else if (key == '\e' || key == '\n') {
+			status->relay_server.selection = ConnectRelayServerInput;
+		}
+		return;
+	}
+	ConnectRelayServerSelection* selection = &status->relay_server.selection;
+	switch (key) {
+		case 'j': case 's':
+			if (*selection < 0 || *selection > ConnectRelayServerExit) {
+				*selection = ConnectRelayServerInput;
+			} else if (*selection < ConnectRelayServerExit) {
+				*selection += 1;
+			}
+			break;
+		case 'k': case 'w':
+			if (*selection < 0 || *selection > ConnectRelayServerExit) {
+				*selection = ConnectRelayServerInput;
+			} else if (*selection > 0){
+				*selection -= 1;
+			}
+			break;
+		case '\n':
+			switch (*selection) {
+				case ConnectRelayServerTyping:
+					break;
+				case ConnectRelayServerInput:
+					status->relay_server.selection = ConnectRelayServerTyping;
+					break;
+				case ConnectRelayServerConnect: {
+					status->page = WaitingRelayServer;
+					break;
+				}
+				case ConnectRelayServerExit:
+					status->page = Greeting;
+					break;
+			}
+			break;
+		case 'i': case 'a':
+			if (*selection == ConnectRelayServerInput) {
+				status->relay_server.selection = ConnectRelayServerTyping;
 			}
 			break;
 	}
@@ -867,7 +1072,7 @@ void handle_creating_key_event(Status* status, int key) {
 		case 'k': case 'w':
 			if (*selection < 0 || *selection > CreatingExit) {
 				*selection = CreatingInput;
-			} else if (*selection > 1){
+			} else if (*selection > 0){
 				*selection -= 1;
 			}
 			break;
@@ -899,7 +1104,7 @@ void handle_creating_key_event(Status* status, int key) {
 					break;
 				}
 				case CreatingExit:
-					status->page = Greeting;
+					status->page = DirectConnect;
 					break;
 			}
 			break;
@@ -941,7 +1146,7 @@ void handle_join_key_event(Status* status, int key) {
 		case 'k': case 'w':
 			if (*selection < 0 || *selection > JoinExit) {
 				*selection = JoinInput;
-			} else if (*selection > 1){
+			} else if (*selection > 0){
 				*selection -= 1;
 			}
 			break;
@@ -952,18 +1157,75 @@ void handle_join_key_event(Status* status, int key) {
 				case JoinInput:
 					status->join.selection = JoinTyping;
 					break;
-				case JoinCreate: {
+				case JoinConnect: {
 					status->page = WaitingServer;
 					break;
 				}
 				case JoinExit:
-					status->page = Greeting;
+					status->page = DirectConnect;
 					break;
 			}
 			break;
 		case 'i': case 'a':
 			if (*selection == JoinInput) {
 				status->join.selection = JoinTyping;
+			}
+			break;
+	}
+}
+
+void handle_enter_relay_server_key_event(Status* status, int key) {
+	if (status->relay_server.key.selection == EnterRelayServerKeyTyping) {
+		if (key >= 'a' && key <= 'z') {
+			if (status->relay_server.key.cursor > 4) {
+				return;
+			}
+			status->relay_server.key.value[status->relay_server.key.cursor] = key;
+			status->relay_server.key.cursor += 1;
+		} else if (key == '\x7f') {
+			if (status->relay_server.key.cursor > 0) {
+				status->relay_server.key.cursor -= 1;
+				status->relay_server.key.value[status->relay_server.key.cursor] = '\0';
+			}
+		} else if (key == '\e' || key == '\n') {
+			status->relay_server.key.selection = EnterRelayServerKeyInput;
+		}
+		return;
+	}
+	EnterRelayServerKeySelection* selection = &status->relay_server.key.selection;
+	switch (key) {
+		case 'j': case 's':
+			if (*selection < 0 || *selection > EnterRelayServerKeySend) {
+				*selection = EnterRelayServerKeyInput;
+			} else if (*selection < EnterRelayServerKeySend) {
+				*selection += 1;
+			}
+			break;
+		case 'k': case 'w':
+			if (*selection < 0 || *selection > EnterRelayServerKeySend) {
+				*selection = EnterRelayServerKeyInput;
+			} else if (*selection > 0){
+				*selection -= 1;
+			}
+			break;
+		case '\n':
+			switch (*selection) {
+				case EnterRelayServerKeyTyping:
+					break;
+				case EnterRelayServerKeyInput:
+					status->relay_server.key.selection = EnterRelayServerKeyTyping;
+					break;
+				case EnterRelayServerKeySend: {
+					ssize_t written = write(status->sock_fd, status->relay_server.key.value, strlen(status->relay_server.key.value));
+					assert(written == strlen(status->relay_server.key.value));
+					status->page = WaitingOtherPlayer;
+					break;
+				}
+			}
+			break;
+		case 'i': case 'a':
+			if (*selection == EnterRelayServerKeyInput) {
+				status->relay_server.key.selection = EnterRelayServerKeyTyping;
 			}
 			break;
 	}
@@ -1122,15 +1384,25 @@ void handle_key_event(Status* status) {
 			case Greeting:
 				handle_greeting_key_event(status, key);
 				break;
+			case DirectConnect:
+				handle_direct_connect_key_event(status, key);
+				break;
+			case ConnectingRelayServer:
+				handle_connecting_relay_server_key_event(status, key);
+				break;
 			case Creating:
 				handle_creating_key_event(status, key);
 				break;
 			case Join:
 				handle_join_key_event(status, key);
 				break;
-			case WaitingClient:
+			case EnterRelayServerKey:
+				handle_enter_relay_server_key_event(status, key);
 				break;
+			case WaitingClient:
 			case WaitingServer:
+			case WaitingRelayServer:
+			case WaitingOtherPlayer:
 				break;
 			case Game:
 				if (status->game.self_preparing || status->game.enemy_preparing) {
@@ -1460,8 +1732,11 @@ void handle_game_action(Status* status) {
 void handle_actions(Status* status) {
 	switch (status->page) {
 		case Greeting:
+		case DirectConnect:
+		case ConnectingRelayServer:
 		case Creating:
 		case Join:
+		case EnterRelayServerKey:
 		case End:
 		case Error:
 			break;
@@ -1481,40 +1756,7 @@ void handle_actions(Status* status) {
 			break;
 		}
 		case WaitingServer: {
-			char buf[32] = {0};
-			strcpy(buf, status->join.connect_addr);
-			char* addr_ip;
-			char* addr_port;
-			{
-				char* save;
-				addr_ip = strtok_r(buf, ":", &save);
-				addr_port = strtok_r(NULL, ":", &save);
-				assert(addr_ip == buf);
-				assert(addr_port != NULL);
-				assert(addr_port != buf);
-			}
-			uint16_t port;
-			{
-				char* end;
-				uint64_t tmp_port = strtoul(addr_port, &end, 10);
-				assert(end != addr_port);
-				assert(tmp_port <= UINT16_MAX);
-				port = tmp_port;
-			}
-
-			struct sockaddr_in addr;
-			addr.sin_family = AF_INET;
-			addr.sin_port = htons(port);
-			if (streq(addr_ip, "localhost")) {
-				addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-			} else {
-				in_addr_t tmp_addr = inet_addr(addr_ip);
-				if (tmp_addr == -1) {
-					status->page = Error;
-					break;
-				}
-				addr.sin_addr.s_addr = tmp_addr;
-			}
+			struct sockaddr_in addr = string_to_sockaddr(status->join.connect_addr);
 
 			int err = connect(status->sock_fd, (struct sockaddr*)&addr, sizeof(addr));
 			// openbsd will have error code EISCONN when connected
@@ -1524,6 +1766,38 @@ void handle_actions(Status* status) {
 			} else if (errno != EAGAIN && errno != EALREADY && errno != EINPROGRESS) {
 				status->page = Error;
 			}
+			break;
+		}
+		case WaitingRelayServer: {
+			struct sockaddr_in addr = string_to_sockaddr(status->relay_server.connect_addr);
+
+			int err = connect(status->sock_fd, (struct sockaddr*)&addr, sizeof(addr));
+			// openbsd will have error code EISCONN when connected
+			if (err == 0 || errno == EISCONN) {
+				status->page = EnterRelayServerKey;
+			} else if (errno != EAGAIN && errno != EALREADY && errno != EINPROGRESS) {
+				status->page = Error;
+			}
+			break;
+		}
+		case WaitingOtherPlayer: {
+			struct pollfd fds = { .fd = status->sock_fd, .events = POLLIN };
+			int polled = poll(&fds, 1, 0);
+			assert(polled != -1);
+			if (polled > 0) {
+				char buf[256] = {0};
+				ssize_t readed = read(status->sock_fd, buf, sizeof(buf) - 1);
+				if (readed == -1) {
+					status->page = Error;
+				} else if (readed == 0) {
+					status->running = false;
+				} else {
+					assert(streq(buf, "CONNECTED"));
+					// FIXME: status->game.my_turn = ?
+					status->page = Game;
+				}
+			}
+
 			break;
 		}
 		case Game:
@@ -1575,6 +1849,19 @@ int main(int argc, char** argv) {
 		.greeting = {
 			.selection = GreetingNone,
 		},
+		.direct_connect = {
+			.selection = DirectConnectNone,
+		},
+		.relay_server = {
+			.selection = ConnectRelayServerTyping,
+			.connect_addr = {0},
+			.cursor = 0,
+			.key = {
+				.selection = EnterRelayServerKeyTyping,
+				.value = {0},
+				.cursor = 0,
+			}
+		},
 		.creating = {
 			.selection = CreatingTyping,
 			.port = -1,
@@ -1596,17 +1883,32 @@ int main(int argc, char** argv) {
 			case Greeting:
 				print_ui(greeting_screen(greeting_options(status.greeting.selection)));
 				break;
+			case DirectConnect:
+				print_ui(greeting_screen(direct_connect_options(status.direct_connect.selection)));
+				break;
+			case ConnectingRelayServer:
+				print_ui(greeting_screen(connect_relay_server_options(status.relay_server.connect_addr, status.relay_server.selection)));
+				break;
 			case Creating:
 				print_ui(greeting_screen(creating_options(status.creating.port, status.creating.selection)));
 				break;
 			case Join:
 				print_ui(greeting_screen(join_options(status.join.connect_addr, status.join.selection)));
 				break;
+			case EnterRelayServerKey:
+				print_ui(greeting_screen(enter_relay_server_key_options(status.relay_server.key.value, status.relay_server.key.selection)));
+				break;
 			case WaitingClient:
 				print_ui(greeting_screen(waiting_client(status.creating.port)));
 				break;
 			case WaitingServer:
 				print_ui(greeting_screen(waiting_server(status.join.connect_addr)));
+				break;
+			case WaitingRelayServer:
+				print_ui(greeting_screen(waiting_relay_server(status.relay_server.connect_addr)));
+				break;
+			case WaitingOtherPlayer:
+				print_ui(greeting_screen(waiting_other_player(status.relay_server.key.value)));
 				break;
 			case Game:
 				print_ui(game_ui(&status.game));
