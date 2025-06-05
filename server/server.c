@@ -114,7 +114,7 @@ void* wait_thread(void* raw_info) {
 			}
 		}
 		if (found) {
-			int sock1_fd = entrys->ptr->wait_sock_fd;
+			int sock1_fd = entrys->ptr[index].wait_sock_fd;
 			int sock2_fd = info->sock_fd;
 
 			entrys->len -= 1;
@@ -128,8 +128,8 @@ void* wait_thread(void* raw_info) {
 			{
 				WorkThreadInfo* work_info = malloc(sizeof(WorkThreadInfo));
 				*work_info = (WorkThreadInfo){
-					.read_sock_fd = entrys->ptr->wait_sock_fd,
-					.write_sock_fd = info->sock_fd,
+					.read_sock_fd = sock1_fd,
+					.write_sock_fd = sock2_fd,
 				};
 
 				pthread_t thread;
@@ -143,8 +143,8 @@ void* wait_thread(void* raw_info) {
 			{
 				WorkThreadInfo* work_info = malloc(sizeof(WorkThreadInfo));
 				*work_info = (WorkThreadInfo){
-					.read_sock_fd = dup(info->sock_fd),
-					.write_sock_fd = dup(entrys->ptr->wait_sock_fd),
+					.read_sock_fd = dup(sock2_fd),
+					.write_sock_fd = dup(sock1_fd),
 				};
 				assert(work_info->read_sock_fd != -1);
 				assert(work_info->write_sock_fd != -1);
