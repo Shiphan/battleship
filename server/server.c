@@ -32,7 +32,7 @@ typedef struct EntryVector {
 
 typedef struct WaitThreadInfo {
 	int sock_fd;
-	EntryVector* entrys;
+	EntryVector* entries;
 } WaitThreadInfo;
 
 typedef struct WorkThreadInfo {
@@ -129,7 +129,7 @@ void* work_thread(void* raw_info) {
 
 void* wait_thread(void* raw_info) {
 	WaitThreadInfo* info = (WaitThreadInfo*)raw_info;
-	EntryVector* entrys = info->entrys;
+	EntryVector* entries = info->entries;
 
 	printf("[LOG] wait for a key\n");
 	char buf[1024] = {0};
@@ -139,35 +139,35 @@ void* wait_thread(void* raw_info) {
 	}
 	if (is_valid_key(buf)) {
 		printf("[LOG] new key: `%s`\n", buf);
-		int err = pthread_mutex_lock(&entrys->mutex);
+		int err = pthread_mutex_lock(&entries->mutex);
 		assert(err == 0);
 
 		bool found = false;
 		size_t index = 0;
-		while (!found && index < entrys->len) {
-			if (streq(buf, entrys->ptr[index].key)) {
+		while (!found && index < entries->len) {
+			if (streq(buf, entries->ptr[index].key)) {
 				found = true;
 			} else {
 				index += 1;
 			}
 		}
 		if (found) {
-			int sock1_fd = entrys->ptr[index].wait_sock_fd;
+			int sock1_fd = entries->ptr[index].wait_sock_fd;
 			int sock2_fd = info->sock_fd;
 
-			entrys->len -= 1;
-			for (size_t i = index; i < entrys->len; i ++) {
-				entrys->ptr[i] = entrys->ptr[i + 1];
+			entries->len -= 1;
+			for (size_t i = index; i < entries->len; i ++) {
+				entries->ptr[i] = entries->ptr[i + 1];
 			}
 
-			if (entrys->len < entrys->cap / 4 && entrys->cap / 2 >= MINIMAL_CAPACITY) {
-				entrys->cap /= 2;
-				Entry* new_ptr = realloc(entrys->ptr, entrys->cap * sizeof(Entry));
+			if (entries->len < entries->cap / 4 && entries->cap / 2 >= MINIMAL_CAPACITY) {
+				entries->cap /= 2;
+				Entry* new_ptr = realloc(entries->ptr, entries->cap * sizeof(Entry));
 				assert(new_ptr != NULL);
-				entrys->ptr = new_ptr;
+				entries->ptr = new_ptr;
 			}
 
-			int err = pthread_mutex_unlock(&entrys->mutex);
+			int err = pthread_mutex_unlock(&entries->mutex);
 			assert(err == 0);
 
 			WorkThreadInfo* work_info = malloc(sizeof(WorkThreadInfo));
@@ -186,21 +186,21 @@ void* wait_thread(void* raw_info) {
 				fprintf(stderr, "[ERROR] %s (line: %d)\n", strerror(err), __LINE__);
 			}
 		} else {
-			assert(entrys->len <= entrys->cap);
-			if (entrys->len == entrys->cap) {
-				entrys->cap *= 2;
-				Entry* new_ptr = realloc(entrys->ptr, entrys->cap * sizeof(Entry));
+			assert(entries->len <= entries->cap);
+			if (entries->len == entries->cap) {
+				entries->cap *= 2;
+				Entry* new_ptr = realloc(entries->ptr, entries->cap * sizeof(Entry));
 				assert(new_ptr != NULL);
-				entrys->ptr = new_ptr;
+				entries->ptr = new_ptr;
 			}
-			entrys->ptr[entrys->len] = (Entry){
+			entries->ptr[entries->len] = (Entry){
 				.key = {0},
 				.wait_sock_fd = info->sock_fd,
 			};
-			strncpy(entrys->ptr[entrys->len].key, buf, KEY_LEN);
-			entrys->len += 1;
+			strncpy(entries->ptr[entries->len].key, buf, KEY_LEN);
+			entries->len += 1;
 
-			int err = pthread_mutex_unlock(&entrys->mutex);
+			int err = pthread_mutex_unlock(&entries->mutex);
 			assert(err == 0);
 		}
 	} else {
@@ -261,7 +261,7 @@ int main(int argc, char** argv) {
 		return errno;
 	}
 
-	EntryVector entrys = {
+	EntryVector entries = {
 		.ptr = malloc(MINIMAL_CAPACITY * sizeof(Entry)),
 		.len = 0,
 		.cap = MINIMAL_CAPACITY,
@@ -279,7 +279,7 @@ int main(int argc, char** argv) {
 		WaitThreadInfo* info = malloc(sizeof(WaitThreadInfo));
 		*info = (WaitThreadInfo){
 			.sock_fd = accepted_fd,
-			.entrys = &entrys,
+			.entries = &entries,
 		};
 		pthread_t thread;
 		int err = pthread_create(&thread, NULL, wait_thread, info);
