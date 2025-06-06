@@ -36,8 +36,8 @@ typedef struct WaitThreadInfo {
 } WaitThreadInfo;
 
 typedef struct WorkThreadInfo {
-	int read_sock_fd;
-	int write_sock_fd;
+	int sock1_fd;
+	int sock2_fd;
 } WorkThreadInfo;
 
 bool streq(const char* a, const char* b) {
@@ -59,32 +59,68 @@ bool is_valid_key(char* key) {
 
 void* work_thread(void* raw_info) {
 	WorkThreadInfo* info = (WorkThreadInfo*)raw_info;
-	int read_sock_fd = info->read_sock_fd;
-	int write_sock_fd = info->write_sock_fd;
-	char* message = "CONNECTED";
-	ssize_t written = write(write_sock_fd, message, strlen(message));
+	int sock1_fd = info->sock1_fd;
+	int sock2_fd = info->sock2_fd;
 
-	while (true) {
-		char buf[BUFFER_LEN] = {0};
-		ssize_t readed = read(read_sock_fd, buf, sizeof(buf) - 1);
-		if (readed == -1) {
-			fprintf(stderr, "[ERROR] %s (line: %d)\n", strerror(errno), __LINE__);
-			break;
-		} else if (readed == 0) {
-			printf("[LOG] a socket ended\n");
+	char* message = "CONNECTED";
+	ssize_t written = write(sock1_fd, message, strlen(message));
+	if (written == -1) {
+		fprintf(stderr, "[ERROR] %s (line: %d)\n", strerror(errno), __LINE__);
+	} else if (written != strlen(message)) {
+		fprintf(stderr, "[ERROR] not all readed bytes are written to the sock1 (%ld / %ld) (line: %d)\n", written, strlen(message), __LINE__);
+	}
+
+	written = write(sock2_fd, message, strlen(message));
+	if (written == -1) {
+		fprintf(stderr, "[ERROR] %s (line: %d)\n", strerror(errno), __LINE__);
+	} else if (written != strlen(message)) {
+		fprintf(stderr, "[ERROR] not all readed bytes are written to the sock2 (%ld / %ld) (line: %d)\n", written, strlen(message), __LINE__);
+	}
+
+	struct pollfd fds[2] = {
+		{ .fd = sock1_fd, .events = POLLIN },
+		{ .fd = sock2_fd, .events = POLLIN },
+	};
+	bool end = false;
+	while (!end) {
+		int pollled = poll(fds, 2, -1);
+		if (pollled == -1) {
+			fprintf(stderr, "[ERROR] error on poll %s (line: %d)\n", strerror(errno), __LINE__);
 			break;
 		}
 
-		ssize_t written = write(write_sock_fd, buf, readed);
-		if (written == -1) {
-			fprintf(stderr, "[ERROR] %s (line: %d)\n", strerror(errno), __LINE__);
-		} else if (written != readed) {
-			fprintf(stderr, "[ERROR] not all readed bytes are written to the write_sock (%ld / %ld) (line: %d)\n", written, readed, __LINE__);
+		for (size_t i = 0; i < 2; i++) {
+			if (fds[i].revents == POLLIN) {
+				char buf[BUFFER_LEN] = {0};
+				ssize_t readed = read(fds[i].fd, buf, sizeof(buf) - 1);
+				if (readed == -1) {
+					fprintf(stderr, "[ERROR] %s (line: %d)\n", strerror(errno), __LINE__);
+					end = true;
+				} else if (readed == 0) {
+					printf("[LOG] a socket ended\n");
+					end = true;
+				}
+
+				ssize_t written = write(fds[(i + 1) % 2].fd, buf, readed);
+				if (written == -1) {
+					fprintf(stderr, "[ERROR] %s (line: %d)\n", strerror(errno), __LINE__);
+					end = true;
+				} else if (written != readed) {
+					fprintf(stderr, "[ERROR] not all readed bytes are written to the write_sock (%ld / %ld) (line: %d)\n", written, readed, __LINE__);
+					end = true;
+				}
+			} else if (fds[i].revents == POLLHUP) {
+				printf("[LOG] a socket ended\n");
+				end = true;
+			} else if (fds[i].revents != 0) {
+				fprintf(stderr, "[ERROR] poll return event `%d` (line: %d)\n", fds[i].revents, __LINE__);
+				end = true;
+			}
 		}
 	}
 
-	close(read_sock_fd);
-	close(write_sock_fd);
+	close(sock1_fd);
+	close(sock2_fd);
 	free(raw_info);
 	return NULL;
 }
@@ -125,36 +161,20 @@ void* wait_thread(void* raw_info) {
 			int err = pthread_mutex_unlock(&entrys->mutex);
 			assert(err == 0);
 
-			{
-				WorkThreadInfo* work_info = malloc(sizeof(WorkThreadInfo));
-				*work_info = (WorkThreadInfo){
-					.read_sock_fd = sock1_fd,
-					.write_sock_fd = sock2_fd,
-				};
+			WorkThreadInfo* work_info = malloc(sizeof(WorkThreadInfo));
+			*work_info = (WorkThreadInfo){
+				.sock1_fd = sock1_fd,
+				.sock2_fd = sock2_fd,
+			};
 
-				pthread_t thread;
-				pthread_attr_t attr;
-				int err = pthread_create(&thread, &attr, work_thread, work_info);
-				if (err != 0) {
-					fprintf(stderr, "[ERROR] %s (line: %d)\n", strerror(err), __LINE__);
-				}
+			pthread_t thread;
+			err = pthread_create(&thread, NULL, work_thread, work_info);
+			if (err != 0) {
+				fprintf(stderr, "[ERROR] %s (line: %d)\n", strerror(err), __LINE__);
 			}
-
-			{
-				WorkThreadInfo* work_info = malloc(sizeof(WorkThreadInfo));
-				*work_info = (WorkThreadInfo){
-					.read_sock_fd = dup(sock2_fd),
-					.write_sock_fd = dup(sock1_fd),
-				};
-				assert(work_info->read_sock_fd != -1);
-				assert(work_info->write_sock_fd != -1);
-
-				pthread_t thread;
-				pthread_attr_t attr;
-				int err = pthread_create(&thread, &attr, work_thread, work_info);
-				if (err != 0) {
-					fprintf(stderr, "[ERROR] %s (line: %d)\n", strerror(err), __LINE__);
-				}
+			err = pthread_detach(thread);
+			if (err != 0) {
+				fprintf(stderr, "[ERROR] %s (line: %d)\n", strerror(err), __LINE__);
 			}
 		} else {
 			assert(entrys->len <= entrys->cap);
