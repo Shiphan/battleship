@@ -96,9 +96,11 @@ void* work_thread(void* raw_info) {
 				if (readed == -1) {
 					fprintf(stderr, "[ERROR] %s (line: %d)\n", strerror(errno), __LINE__);
 					end = true;
+					break;
 				} else if (readed == 0) {
 					printf("[LOG] a socket ended\n");
 					end = true;
+					break;
 				}
 
 				ssize_t written = write(fds[(i + 1) % 2].fd, buf, readed);
