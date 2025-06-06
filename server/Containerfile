@@ -1,8 +1,7 @@
-FROM alpine:latest AS build
+FROM archlinux:base-devel AS build
 
 WORKDIR /src
 COPY . .
-RUN apk add build-base
 RUN make server-static
 
 FROM scratch
