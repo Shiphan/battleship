@@ -1,0 +1,12 @@
+FROM alpine:latest AS build
+
+WORKDIR /src
+COPY . .
+RUN apk add build-base
+RUN make server-static
+
+FROM scratch
+
+COPY --from=build /src/server /bin/server
+EXPOSE 8080
+CMD ["/bin/server", "8080"]
