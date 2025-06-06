@@ -16,13 +16,13 @@
 
 #define KEY_LEN 5
 #define BUFFER_LEN 256
+#define MINIMAL_CAPACITY 16
 
 typedef struct Entry {
 	char key[KEY_LEN + 1];
 	int wait_sock_fd;
 } Entry;
 
-// FIXME: entry vector will only grow but never shrink
 typedef struct EntryVector {
 	Entry* ptr;
 	size_t len;
@@ -160,6 +160,13 @@ void* wait_thread(void* raw_info) {
 				entrys->ptr[i] = entrys->ptr[i + 1];
 			}
 
+			if (entrys->len < entrys->cap / 4 && entrys->cap / 2 >= MINIMAL_CAPACITY) {
+				entrys->cap /= 2;
+				Entry* new_ptr = realloc(entrys->ptr, entrys->cap * sizeof(Entry));
+				assert(new_ptr != NULL);
+				entrys->ptr = new_ptr;
+			}
+
 			int err = pthread_mutex_unlock(&entrys->mutex);
 			assert(err == 0);
 
@@ -255,9 +262,9 @@ int main(int argc, char** argv) {
 	}
 
 	EntryVector entrys = {
-		.ptr = malloc(16 * sizeof(Entry)),
+		.ptr = malloc(MINIMAL_CAPACITY * sizeof(Entry)),
 		.len = 0,
-		.cap = 16,
+		.cap = MINIMAL_CAPACITY,
 		.mutex = PTHREAD_MUTEX_INITIALIZER,
 	};
 
