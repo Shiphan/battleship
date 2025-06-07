@@ -95,12 +95,11 @@
 ```
 
 訊號
-- PING
-- READY 12 // hp/health
-- DICE 6
+- READY 1,12 // 0/1, hp
 - FIRE 0,0
-
 - HIT 0,0
 - MISS 0,0
-- DESTROYED h,0,2,0 // x1,x2,y && x2 > x1
-- DESTROYED v,0,0,2 // x,y1,y2 && y2 > y1
+- DESTROYED h,0,2,0 // x1,x2,y (x2 > x1)
+- DESTROYED v,0,0,2 // x,y1,y2 (y2 > y1)
+- IGNORE
+

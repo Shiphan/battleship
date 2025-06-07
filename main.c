@@ -13,6 +13,7 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <termios.h>
+#include <time.h>
 #include <unistd.h>
 
 #define COLUMN 10
@@ -206,11 +207,14 @@ typedef struct GameStatus {
 	Vec2 cursor;
 	bool self_preparing;
 	bool enemy_preparing;
+	bool is_player_1;
 	bool my_turn;
 	int self_hp;
 	int enemy_hp;
 	int self_max_hp;
 	int enemy_max_hp;
+	int self_turn_factor;
+	int enemy_turn_factor;
 } GameStatus;
 
 typedef struct Status {
@@ -1329,14 +1333,20 @@ void handle_preparing_key_event(Status* status, int key) {
 			if (status->game.self_max_hp == 0) {
 				break;
 			}
+			srandom(time(NULL));
 			status->game.cursor = (Vec2){ .x = COLUMN - 1, .y = 0, };
 			status->game.preparing_cursor = (Vec2){ .x = -1, .y = -1, };
 			status->game.self_preparing = false;
 			status->game.self_hp = status->game.self_max_hp;
+			status->game.self_turn_factor = (bool)(random() % 2);
 			char* buf;
-			asprintf(&buf, "READY %d\n", status->game.self_max_hp);
+			asprintf(&buf, "READY %d,%d\n", status->game.self_turn_factor, status->game.self_max_hp);
 			write(status->sock_fd, buf, strlen(buf));
 			free(buf);
+
+			if (status->game.enemy_turn_factor != -1) {
+				status->game.my_turn = (status->game.self_turn_factor + status->game.enemy_turn_factor) % 2 == status->game.is_player_1;
+			}
 			break;
 	}
 }
@@ -1718,11 +1728,21 @@ void handle_game_action(Status* status) {
 			}
 		} else if (string_has_prefix(buf, "READY")) {
 			assert(parms != NULL);
+			char* save;
+			char* turn_factor_str = strtok_r(parms, ",", &save);
+			char* hp_str = strtok_r(NULL, "", &save);
+
 			char* end;
-			status->game.enemy_max_hp = strtoul(parms, &end, 10);
-			assert(end != parms);
+			status->game.enemy_turn_factor = (bool)strtoul(turn_factor_str, &end, 10);
+			assert(end != turn_factor_str);
+			status->game.enemy_max_hp = strtoul(hp_str, &end, 10);
+			assert(end != hp_str);
 			status->game.enemy_hp = status->game.enemy_max_hp;
 			status->game.enemy_preparing = false;
+
+			if (status->game.self_turn_factor != -1) {
+				status->game.my_turn = (status->game.self_turn_factor + status->game.enemy_turn_factor) % 2 == status->game.is_player_1;
+			}
 		} else if (string_has_prefix(buf, "IGNORE")) {
 			assert(parms == NULL);
 		}
@@ -1749,7 +1769,7 @@ void handle_actions(Status* status) {
 				close(status->sock_fd);
 				status->sock_fd = accepted_fd;
 				socket_fd = accepted_fd;
-				status->game.my_turn = true;
+				status->game.is_player_1 = true;
 			} else if (errno != EAGAIN && errno != EWOULDBLOCK) {
 				status->page = Error;
 			}
@@ -1762,7 +1782,7 @@ void handle_actions(Status* status) {
 			// openbsd will have error code EISCONN when connected
 			if (err == 0 || errno == EISCONN) {
 				status->page = Game;
-				status->game.my_turn = false;
+				status->game.is_player_1 = false;
 			} else if (errno != EAGAIN && errno != EALREADY && errno != EINPROGRESS) {
 				status->page = Error;
 			}
@@ -1793,9 +1813,9 @@ void handle_actions(Status* status) {
 					status->running = false;
 				} else {
 					if (streq(buf, "CONNECTED AS 1")) {
-						status->game.my_turn = true;
+						status->game.is_player_1 = true;
 					} else if (streq(buf, "CONNECTED AS 2")) {
-						status->game.my_turn = false;
+						status->game.is_player_1 = false;
 					} else {
 						assert(streq(buf, "CONNECTED AS 1") || streq(buf, "CONNECTED AS 2"));
 					}
@@ -1850,6 +1870,8 @@ int main(int argc, char** argv) {
 			.enemy_preparing = true,
 			.enemy_hp = 0,
 			.enemy_max_hp = 0,
+			.self_turn_factor = -1,
+			.enemy_turn_factor = -1,
 		},
 		.greeting = {
 			.selection = GreetingNone,
