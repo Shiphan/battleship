@@ -1792,8 +1792,13 @@ void handle_actions(Status* status) {
 				} else if (readed == 0) {
 					status->running = false;
 				} else {
-					assert(streq(buf, "CONNECTED"));
-					// FIXME: status->game.my_turn = ?
+					if (streq(buf, "CONNECTED AS 1")) {
+						status->game.my_turn = true;
+					} else if (streq(buf, "CONNECTED AS 2")) {
+						status->game.my_turn = false;
+					} else {
+						assert(streq(buf, "CONNECTED AS 1") || streq(buf, "CONNECTED AS 2"));
+					}
 					status->page = Game;
 				}
 			}

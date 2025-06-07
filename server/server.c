@@ -62,7 +62,7 @@ void* work_thread(void* raw_info) {
 	int sock1_fd = info->sock1_fd;
 	int sock2_fd = info->sock2_fd;
 
-	char* message = "CONNECTED";
+	char* message = "CONNECTED AS 1";
 	ssize_t written = write(sock1_fd, message, strlen(message));
 	if (written == -1) {
 		fprintf(stderr, "[ERROR] %s (line: %d)\n", strerror(errno), __LINE__);
@@ -70,6 +70,7 @@ void* work_thread(void* raw_info) {
 		fprintf(stderr, "[ERROR] not all readed bytes are written to the sock1 (%ld / %ld) (line: %d)\n", written, strlen(message), __LINE__);
 	}
 
+	message = "CONNECTED AS 2";
 	written = write(sock2_fd, message, strlen(message));
 	if (written == -1) {
 		fprintf(stderr, "[ERROR] %s (line: %d)\n", strerror(errno), __LINE__);
