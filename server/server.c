@@ -132,14 +132,12 @@ void* wait_thread(void* raw_info) {
 	WaitThreadInfo* info = (WaitThreadInfo*)raw_info;
 	EntryVector* entries = info->entries;
 
-	printf("[LOG] wait for a key\n");
 	char buf[1024] = {0};
 	ssize_t readed = read(info->sock_fd, buf, sizeof(buf) - 1);
 	if (readed == -1) {
 		fprintf(stderr, "[ERROR] %s (line: %d)\n", strerror(errno), __LINE__);
 	}
 	if (is_valid_key(buf)) {
-		printf("[LOG] new key: `%s`\n", buf);
 		int err = pthread_mutex_lock(&entries->mutex);
 		assert(err == 0);
 
@@ -153,6 +151,7 @@ void* wait_thread(void* raw_info) {
 			}
 		}
 		if (found) {
+			printf("[LOG] paired key: `%s`\n", buf);
 			int sock1_fd = entries->ptr[index].wait_sock_fd;
 			int sock2_fd = info->sock_fd;
 
@@ -160,12 +159,14 @@ void* wait_thread(void* raw_info) {
 			for (size_t i = index; i < entries->len; i ++) {
 				entries->ptr[i] = entries->ptr[i + 1];
 			}
+			printf("[LOG] new entries length: %lu\n", entries->len);
 
 			if (entries->len < entries->cap / 4 && entries->cap / 2 >= MINIMAL_CAPACITY) {
 				entries->cap /= 2;
 				Entry* new_ptr = realloc(entries->ptr, entries->cap * sizeof(Entry));
 				assert(new_ptr != NULL);
 				entries->ptr = new_ptr;
+				printf("[LOG] new entries capacity: %lu\n", entries->cap);
 			}
 
 			int err = pthread_mutex_unlock(&entries->mutex);
@@ -187,12 +188,14 @@ void* wait_thread(void* raw_info) {
 				fprintf(stderr, "[ERROR] %s (line: %d)\n", strerror(err), __LINE__);
 			}
 		} else {
+			printf("[LOG] new key: `%s`\n", buf);
 			assert(entries->len <= entries->cap);
 			if (entries->len == entries->cap) {
 				entries->cap *= 2;
 				Entry* new_ptr = realloc(entries->ptr, entries->cap * sizeof(Entry));
 				assert(new_ptr != NULL);
 				entries->ptr = new_ptr;
+				printf("[LOG] new entries capacity: %lu\n", entries->cap);
 			}
 			entries->ptr[entries->len] = (Entry){
 				.key = {0},
@@ -200,6 +203,7 @@ void* wait_thread(void* raw_info) {
 			};
 			strncpy(entries->ptr[entries->len].key, buf, KEY_LEN);
 			entries->len += 1;
+			printf("[LOG] new entries length: %lu\n", entries->len);
 
 			int err = pthread_mutex_unlock(&entries->mutex);
 			assert(err == 0);
@@ -253,14 +257,17 @@ int main(int argc, char** argv) {
 	addr.sin_addr.s_addr = htonl(INADDR_ANY);
 	int err = bind(sock_fd, (struct sockaddr*)&addr, sizeof(addr));
 	if (err == -1) {
-		fprintf(stderr, "[ERROR] %s (line: %d)\n", strerror(errno), __LINE__);
+		fprintf(stderr, "[ERROR] bind error: %s (line: %d)\n", strerror(errno), __LINE__);
 		return errno;
 	}
 
 	err = listen(sock_fd, SOMAXCONN);
 	if (err == -1) {
+		fprintf(stderr, "[ERROR] listen error: %s (line: %d)\n", strerror(errno), __LINE__);
 		return errno;
 	}
+	printf("[LOG] start listening port %d\n", port);
+	
 
 	EntryVector entries = {
 		.ptr = malloc(MINIMAL_CAPACITY * sizeof(Entry)),
